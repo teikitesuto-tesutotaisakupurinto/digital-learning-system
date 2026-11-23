@@ -470,9 +470,6 @@ app.post("/api/users", authenticate, requireRole("teacher"), async (req, res) =>
     if (!email || !name || password.length < 8) {
       return res.status(400).json({ error: "メール・氏名・8文字以上のパスワードを入力してください。" });
     }
-    if (!["student"].includes(role)) {
-      return res.status(400).json({ error: "指定された権限は使用できません。" });
-    }
     if (!["teacher", "student"].includes(role)) {
       return res.status(400).json({ error: "権限は先生または生徒を選択してください。" });
     }
