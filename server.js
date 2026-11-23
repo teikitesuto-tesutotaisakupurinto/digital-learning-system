@@ -845,6 +845,8 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
       if (!selectedEnrollments.length) {
         return res.status(400).json({ error: classRow.name + " に配信対象の生徒がいません。" });
       }
+      const freshEnrollments = selectedEnrollments.filter(enrollment => !alreadyAssigned.has(enrollment.studentId));
+      if (!freshEnrollments.length) continue;
 
       const distribution = await createRow("distributions", {
         title, classId, description, status, releaseAt, dueAt,
@@ -858,8 +860,7 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
         });
       }
       let classAssigned = 0;
-      for (const enrollment of selectedEnrollments) {
-        if (alreadyAssigned.has(enrollment.studentId)) continue;
+      for (const enrollment of freshEnrollments) {
         alreadyAssigned.add(enrollment.studentId);
         classAssigned++;
         for (let index = 0; index < materials.length; index++) {
