@@ -474,13 +474,9 @@ async function getSystemSetting(key) {
 }
 
 /* Health */
-app.get("/api/health", (req, res) => {
-  res.json({
-    success: true,
-    service: "digital-learning-system",
-    database: DATABASE_ID,
-    storage: BUCKET_ID
-  });
+app.get("/api/health",(req,res)=>{
+  res.setHeader("Cache-Control","no-store");
+  res.json({success:true,service:"digital-learning-system",status:"ok",timestamp:new Date().toISOString()});
 });
 
 app.get("/api/me", authenticate, (req, res) => {
@@ -840,11 +836,11 @@ app.get("/api/materials/:id/file", authenticate, async (req, res) => {
     } else if(req.profile.role==="teacher"&&!(await teacherOwnsMaterial(req,material))){
       return res.status(404).json({error:"教材が見つかりません。"});
     } else if (req.profile.role === "student") {
-      const assigned = await listRows("assignments", [
-        Query.equal("studentId", req.authUser.$id),
-        Query.equal("materialId", material.$id)
-      ], 100);
-      if (!assigned.rows.length) return res.status(403).json({ error: "この教材は配信されていません。" });
+      const assigned=await listRows("assignments",[
+        Query.equal("studentId",req.authUser.$id),Query.equal("materialId",material.$id)
+      ],100);
+      const released=assigned.rows.some(item=>["available","in_progress","submitted","returned","passed"].includes(item.status));
+      if(!released)return res.status(403).json({error:"この教材はまだ利用できません。"});
     }
 
     if (!fileId) return res.status(404).json({ error: "ファイルがありません。" });
@@ -1165,11 +1161,12 @@ app.post("/api/submissions/:id/submit", authenticate, async (req, res) => {
     if (submission.studentId !== req.authUser.$id || req.profile.role !== "student") {
       return res.status(403).json({ error: "提出権限がありません。" });
     }
-    const updated = await updateRow("submissions", submission.$id, {
-      status: "submitted",
-      submittedAt: new Date().toISOString()
+    const assignment=await getRow("assignments",submission.assignmentId);
+    if(assignment.studentId!==req.authUser.$id)return res.status(403).json({error:"提出権限がありません。"});
+    if(["submitted","passed"].includes(assignment.status))return res.status(409).json({error:"この教材はすでに提出済みです。"});
+    const updated=await updateRow("submissions",submission.$id,{
+      status:"submitted",submittedAt:new Date().toISOString()
     });
-    const assignment = await getRow("assignments", submission.assignmentId);
     await updateRow("assignments", assignment.$id, { status: "submitted" });
     await notifyAssignmentLive(assignment.$id);
     res.json({ success: true, submission: updated });
@@ -1224,21 +1221,24 @@ function beginEventStream(req, res, key) {
   res.write("event: connected\ndata: {}\n\n");
   addLiveClient(key, res);
 }
-app.get("/api/teacher/live-stream/:assignmentId", async (req, res) => {
-  const auth = await authenticateStream(req, res);
-  if (!auth) return;
-  try {
-    await getRow("assignments", req.params.assignmentId);
-    beginEventStream(req, res, "assignment:" + req.params.assignmentId);
-  } catch { res.status(404).end(); }
+app.get("/api/teacher/live-stream/:assignmentId",async(req,res)=>{
+  const auth=await authenticateStream(req,res);
+  if(!auth)return;
+  try{
+    const assignment=await getRow("assignments",req.params.assignmentId);
+    const cls=await getRow("classes",assignment.classId);
+    if(cls.createdBy!==auth.authUser.$id)return res.status(404).end();
+    beginEventStream(req,res,"assignment:"+req.params.assignmentId);
+  }catch{res.status(404).end();}
 });
-app.get("/api/teacher/class-stream/:classId", async (req, res) => {
-  const auth = await authenticateStream(req, res);
-  if (!auth) return;
-  try {
-    await getRow("classes", req.params.classId);
-    beginEventStream(req, res, "class:" + req.params.classId);
-  } catch { res.status(404).end(); }
+app.get("/api/teacher/class-stream/:classId",async(req,res)=>{
+  const auth=await authenticateStream(req,res);
+  if(!auth)return;
+  try{
+    const cls=await getRow("classes",req.params.classId);
+    if(cls.createdBy!==auth.authUser.$id)return res.status(404).end();
+    beginEventStream(req,res,"class:"+req.params.classId);
+  }catch{res.status(404).end();}
 });
 async function notifyAssignmentLive(assignmentId) {
   emitLiveEvent("assignment:" + assignmentId);
@@ -1424,18 +1424,16 @@ app.get("/api/submissions/:id/comments", authenticate, async (req, res) => {
   if (req.profile.role === "student" && submission.studentId !== req.authUser.$id) {
     return res.status(403).json({ error: "閲覧権限がありません。" });
   }
-  const result = await listRows("comments", [
-    Query.equal("submissionId", submission.$id)
-  ], 100);
-  res.json({ success: true, comments: result.rows });
+  if(req.profile.role==="teacher"&&!(await teacherOwnsSubmission(req,submission)))return res.status(404).json({error:"答案が見つかりません。"});
+  const result=await listRows("comments",[Query.equal("submissionId",submission.$id)],100);
+  res.json({success:true,comments:result.rows});
 });
 
 app.post("/api/submissions/:id/comments", authenticate, async (req, res) => {
   const submission = await getRow("submissions", req.params.id);
-  if (req.profile.role === "student" && submission.studentId !== req.authUser.$id) {
-    return res.status(403).json({ error: "投稿権限がありません。" });
-  }
-  if (!["student", "teacher", "teacher"].includes(req.profile.role)) {
+  if(req.profile.role==="student"&&submission.studentId!==req.authUser.$id)return res.status(403).json({error:"投稿権限がありません。"});
+  if(req.profile.role==="teacher"&&!(await teacherOwnsSubmission(req,submission)))return res.status(404).json({error:"答案が見つかりません。"});
+  if(!["student","teacher"].includes(req.profile.role)){
     return res.status(403).json({ error: "投稿権限がありません。" });
   }
   const body = String(req.body.body || "").trim();
