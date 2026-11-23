@@ -1,14 +1,70 @@
 <!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ログイン | デジタル問題演習</title><link rel="stylesheet" href="/portal.css"></head>
-<body class="login-body"><header class="topbar"><strong>デジタル問題演習</strong></header><main class="login-wrap"><section class="login-card"><p class="eyebrow">DIGITAL LEARNING SYSTEM</p><h1>ログイン</h1><p class="muted">登録済みのメールアドレスとパスワードを入力してください。</p><form id="login-form"><label>メールアドレス<input id="email" type="email" autocomplete="username" required></label><label>パスワード<input id="password" type="password" autocomplete="current-password" required></label><button id="login-button" class="primary">ログイン</button><p id="login-message" class="message" aria-live="polite"></p></form><p class="muted small">アカウントの新規作成は管理者が行います。</p></section></main><footer>© 2026 デジタル問題演習. All Rights Reserved.</footer>
-<script type="module">
-import {Client,Account} from "https://cdn.jsdelivr.net/npm/appwrite@17.0.0/+esm";
-const client=new Client().setEndpoint("https://sgp.cloud.appwrite.io/v1").setProject("6b03d796003d1c4e4943");
-const account=new Account(client),form=document.getElementById("login-form"),button=document.getElementById("login-button"),message=document.getElementById("login-message");
-form.addEventListener("submit",async e=>{e.preventDefault();button.disabled=true;button.textContent="ログイン中…";message.textContent="";
-try{await account.createEmailPasswordSession(document.getElementById("email").value.trim(),document.getElementById("password").value);
-const jwt=await account.createJWT();sessionStorage.setItem("dls_jwt",jwt.jwt);
-const r=await fetch("/api/me",{headers:{Authorization:"Bearer "+jwt.jwt}});const data=await r.json();if(!r.ok)throw new Error(data.error||"利用権限を確認できません。");
-location.href="/"+data.user.role+"/dashboard.html";
-}catch(err){message.textContent=err.message||"ログインできませんでした。";message.className="message error";button.disabled=false;button.textContent="ログイン";}});
-</script></body></html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f9fc">
+  <meta name="description" content="デジタル問題演習 - 教材配信・ブラウザ演習・提出・採点を一元管理">
+  <title>ログイン | デジタル問題演習</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="brand-panel" aria-label="サービス紹介">
+      <a class="brand-lockup" href="/login.html" aria-label="デジタル問題演習 ホーム">
+        <span class="brand-mark"><span></span><span></span><span></span></span>
+        <span class="brand-name">デジタル問題演習</span>
+      </a>
+      <div class="brand-copy">
+        <p class="overline">DIGITAL LEARNING PLATFORM</p>
+        <h1>学びを、<br><em>ひとつの場所に。</em></h1>
+        <p class="brand-description">教材の配信から、ブラウザでの演習、提出、添削まで。毎日の学習をシンプルにつなぎます。</p>
+      </div>
+      <div class="preview-card" aria-hidden="true">
+        <div class="preview-top"><span class="preview-dot"></span><span>LEARNING WORKSPACE</span><span class="preview-status">ONLINE</span></div>
+        <div class="preview-content">
+          <div class="preview-sidebar"><i></i><i></i><i></i><i></i></div>
+          <div class="preview-paper">
+            <div class="paper-line short"></div><div class="paper-line"></div><div class="paper-line medium"></div>
+            <div class="paper-question"><b>問 1</b><span></span><span></span></div>
+            <div class="paper-answer"><svg viewBox="0 0 220 64" role="img"><path d="M8 38 C26 8 38 60 58 28 S92 14 104 40 S130 54 144 23 S173 8 184 37 S203 48 214 19" fill="none" stroke="#5279db" stroke-width="3.2" stroke-linecap="round"/></svg></div>
+            <div class="paper-line medium"></div><div class="paper-line short"></div>
+          </div>
+        </div>
+        <div class="preview-bottom"><span>学習の進捗</span><div class="progress-track"><i></i></div><b>72%</b></div>
+      </div>
+      <p class="brand-footnote">学習する人と、支える人をつなぐ。</p>
+    </section>
+
+    <section class="form-panel">
+      <div class="form-wrap">
+        <div class="mobile-brand"><span class="brand-mark"><span></span><span></span><span></span></span><b>デジタル問題演習</b></div>
+        <div class="form-heading">
+          <p class="form-kicker">WELCOME BACK</p>
+          <h2>おかえりなさい</h2>
+          <p>アカウント情報を入力してログインしてください。</p>
+        </div>
+        <form id="login-form" novalidate>
+          <div class="input-group">
+            <label for="email">メールアドレス</label>
+            <div class="input-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="m4.5 7 7.5 6 7.5-6"></path></svg><input id="email" name="email" type="email" placeholder="name@example.com" autocomplete="username" required></div>
+          </div>
+          <div class="input-group">
+            <div class="label-row"><label for="password">パスワード</label><button type="button" class="text-button" id="forgot-button">パスワードをお忘れですか？</button></div>
+            <div class="input-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="10" rx="2.5"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><input id="password" name="password" type="password" placeholder="パスワードを入力" autocomplete="current-password" required><button type="button" class="eye-button" id="toggle-password" aria-label="パスワードを表示"><svg viewBox="0 0 24 24"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg></button></div>
+          </div>
+          <div id="login-message" class="form-message" role="status" aria-live="polite"></div>
+          <button id="login-button" class="submit-button" type="submit"><span>ログイン</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+        </form>
+        <div class="security-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 19 6v5c0 4.7-2.8 8-7 10-4.2-2-7-5.3-7-10V6l7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg><span>登録済みアカウント専用の安全なログインです。</span></div>
+        <p class="account-help">アカウントの新規発行・変更は、所属先の管理者または先生にお問い合わせください。</p>
+        <div class="form-footer"><span>© 2026 デジタル問題演習</span><span>SECURE ACCESS</span></div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/login.js"></script>
+</body>
+</html>
