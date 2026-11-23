@@ -1,0 +1,291 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#2563eb">
+  <title>デジタル問題演習 | ログイン</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      font-family: Arial, "Noto Sans JP", sans-serif;
+      background: #f3f6fb;
+      color: #1e293b;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      height: 68px;
+      background: #fff;
+      border-bottom: 1px solid #e5eaf2;
+      display: flex;
+      align-items: center;
+      padding: 0 6%;
+    }
+
+    .brand {
+      font-size: 19px;
+      font-weight: 700;
+      color: #1d4ed8;
+      letter-spacing: .02em;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+
+    .login-container {
+      width: 100%;
+      max-width: 430px;
+    }
+
+    .heading {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .heading h1 {
+      font-size: 27px;
+      margin-bottom: 10px;
+    }
+
+    .heading p {
+      color: #64748b;
+      font-size: 14px;
+    }
+
+    .login-card {
+      background: #fff;
+      border: 1px solid #e5eaf2;
+      border-radius: 14px;
+      padding: 34px;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, .05);
+    }
+
+    .login-card h2 {
+      font-size: 19px;
+      margin-bottom: 25px;
+    }
+
+    .field {
+      margin-bottom: 19px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    input {
+      width: 100%;
+      height: 46px;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      padding: 0 13px;
+      font-size: 14px;
+      outline: none;
+      transition: .2s;
+    }
+
+    input:focus {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+    }
+
+    button {
+      width: 100%;
+      height: 47px;
+      border: none;
+      border-radius: 7px;
+      background: #2563eb;
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    button:disabled {
+      opacity: .6;
+      cursor: wait;
+    }
+
+    .message {
+      display: none;
+      padding: 12px;
+      margin-top: 17px;
+      border-radius: 7px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .message.error {
+      display: block;
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+
+    .message.info {
+      display: block;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .help {
+      text-align: center;
+      margin-top: 22px;
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    footer {
+      padding: 22px;
+      text-align: center;
+      color: #94a3b8;
+      font-size: 12px;
+      border-top: 1px solid #e5eaf2;
+      background: white;
+    }
+
+    @media (max-width: 480px) {
+      .login-card {
+        padding: 25px 21px;
+      }
+
+      .heading h1 {
+        font-size: 23px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="brand">デジタル問題演習</div>
+  </header>
+
+  <main>
+    <div class="login-container">
+      <div class="heading">
+        <h1>デジタル問題演習</h1>
+        <p>教材の配信から演習・採点までを一元管理</p>
+      </div>
+
+      <section class="login-card">
+        <h2>ログイン</h2>
+
+        <form id="loginForm">
+          <div class="field">
+            <label for="email">メールアドレス</label>
+            <input
+              id="email"
+              type="email"
+              placeholder="example@example.com"
+              autocomplete="username"
+              required
+            >
+          </div>
+
+          <div class="field">
+            <label for="password">パスワード</label>
+            <input
+              id="password"
+              type="password"
+              placeholder="パスワードを入力"
+              autocomplete="current-password"
+              required
+            >
+          </div>
+
+          <button id="loginButton" type="submit">
+            ログイン
+          </button>
+
+          <div id="message" class="message"></div>
+        </form>
+      </section>
+
+      <div class="help">
+        アカウントについては管理者にお問い合わせください。
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    © 2026 デジタル問題演習. All Rights Reserved.
+  </footer>
+
+  <script type="module">
+    import { Client, Account } from
+      "https://cdn.jsdelivr.net/npm/appwrite@17.0.0/+esm";
+
+    const client = new Client()
+      .setEndpoint("https://sgp.cloud.appwrite.io/v1")
+      .setProject("6b03d796003d1c4e4943");
+
+    const account = new Account(client);
+
+    const form = document.getElementById("loginForm");
+    const button = document.getElementById("loginButton");
+    const message = document.getElementById("message");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const email = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+
+      button.disabled = true;
+      button.textContent = "ログイン中...";
+      message.className = "message";
+      message.textContent = "";
+
+      try {
+        await account.createEmailPasswordSession(email, password);
+
+        message.className = "message info";
+        message.textContent = "ログインしました。画面を準備しています。";
+
+        const user = await account.get();
+
+        if (user.labels.includes("admin")) {
+          location.href = "/admin/dashboard.html";
+        } else if (user.labels.includes("teacher")) {
+          location.href = "/teacher/dashboard.html";
+        } else {
+          location.href = "/student/dashboard.html";
+        }
+
+      } catch (error) {
+        message.className = "message error";
+        message.textContent =
+          error.code === 401
+            ? "メールアドレスまたはパスワードが正しくありません。"
+            : "ログインに失敗しました。設定を確認してください。";
+
+        button.disabled = false;
+        button.textContent = "ログイン";
+      }
+    });
+  </script>
+</body>
+</html>
