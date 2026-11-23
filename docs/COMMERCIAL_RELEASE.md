@@ -19,6 +19,7 @@
 | `APPWRITE_DATABASE_ID` | Yes | TablesDB database ID |
 | `APPWRITE_BUCKET_ID` | Yes | Private PDF storage bucket ID |
 | `SCHOOL_NAME` | First deployment | Name for the initial tenant created during startup |
+| `SCHOOL_SLUG` | First deployment | URL slug for the initial school, e.g. `teiki-test` |
 | `PLATFORM_ADMIN_EMAILS` | For platform console | Comma-separated allowlist of platform operator email addresses |
 
 Do not paste the API key into GitHub, browser code, or support messages. If the key is replaced, update the Render environment variable and redeploy.
@@ -57,6 +58,13 @@ The migration is additive and does not delete existing records. Do not manually 
 5. Give the initial teacher credentials to the school's authorized contact through a secure channel. Do not send passwords in plain email.
 
 Each school receives a separate `schoolId`. Staff members created by a teacher belong to that teacher's school. School status can be suspended or reactivated from the platform console.
+
+The school login URL is `https://your-domain.example/<slug>/login`, for example
+`https://your-domain.example/teiki-test/login`. The login page sends the slug to
+the server during account verification; the server rejects a user whose stored
+school does not match the requested school URL. The school ID stored on the
+authenticated profile remains the authority for all subsequent tenant-scoped API
+requests.
 
 ## Storage and privacy requirements
 
