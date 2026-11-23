@@ -158,6 +158,8 @@ const schemas = {
       ["startedAt", "datetime", null, true],
       ["lastHeartbeatAt", "datetime", null, true],
       ["durationSeconds", "integer", null, true],
+      ["activePageNo", "integer", null, false],
+      ["isDrawing", "boolean", null, false],
       ["endedAt", "datetime", null, false]
     ]
   },
@@ -1033,6 +1035,8 @@ app.post("/api/study-sessions/start", authenticate, requireRole("student"), asyn
       startedAt: now,
       lastHeartbeatAt: now,
       durationSeconds: 0,
+      activePageNo: 1,
+      isDrawing: false,
       endedAt: null
     });
     res.status(201).json({ success: true, session });
@@ -1054,7 +1058,9 @@ async function updateStudySession(req, res, endSession) {
     const elapsed = Math.max(0, Math.min(90, Math.floor((now - last) / 1000)));
     const data = {
       durationSeconds: Math.max(0, Number(session.durationSeconds) || 0) + elapsed,
-      lastHeartbeatAt: new Date(now).toISOString()
+      lastHeartbeatAt: new Date(now).toISOString(),
+      activePageNo: Math.max(1, Number(req.body.pageNo) || Number(session.activePageNo) || 1),
+      isDrawing: endSession ? false : Boolean(req.body.isDrawing)
     };
     if (endSession) data.endedAt = new Date(now).toISOString();
     const updated = await updateRow("study_sessions", session.$id, data);
@@ -1124,6 +1130,42 @@ app.post("/api/submissions/:id/submit", authenticate, async (req, res) => {
 });
 
 /* Teacher progress and grading */
+app.get("/api/teacher/live/:assignmentId", authenticate, requireRole("teacher"), async (req, res) => {
+  try {
+    const assignment = await getRow("assignments", req.params.assignmentId);
+    const submission = await findLatestSubmission(assignment.$id, assignment.studentId);
+    if (!submission) return res.status(404).json({ error: "答案データがまだありません。" });
+    const [material, pages, student, sessions] = await Promise.all([
+      getRow("materials", assignment.materialId),
+      listRows("submission_pages", [Query.equal("submissionId", submission.$id)], 200),
+      listRows("users", [Query.equal("authUserId", assignment.studentId)], 1),
+      listRows("study_sessions", [
+        Query.equal("assignmentId", assignment.$id),
+        Query.equal("studentId", assignment.studentId)
+      ], 100)
+    ]);
+    const latestSession = sessions.rows.sort((a, b) =>
+      new Date(b.lastHeartbeatAt).getTime() - new Date(a.lastHeartbeatAt).getTime())[0] || null;
+    const heartbeatAge = latestSession ? Date.now() - new Date(latestSession.lastHeartbeatAt).getTime() : Infinity;
+    const active = Boolean(latestSession && !latestSession.endedAt && heartbeatAge <= 20000);
+    res.json({
+      success: true,
+      active,
+      isDrawing: active && Boolean(latestSession.isDrawing),
+      activePageNo: active ? Math.max(1, Number(latestSession.activePageNo) || 1) : null,
+      lastSeenAt: latestSession?.lastHeartbeatAt || null,
+      assignment,
+      submission,
+      material: { id: material.$id, title: material.title, pageUrl: "/api/materials/" + material.$id + "/file" },
+      student: student.rows[0] || null,
+      pages: pages.rows
+    });
+  } catch (error) {
+    console.error("Live workspace fetch failed:", error);
+    res.status(500).json({ error: "リアルタイム答案を取得できませんでした。" });
+  }
+});
+
 app.get("/api/classes/:id/progress", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const enrollments = await listRows("enrollments", [
