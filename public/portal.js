@@ -68,6 +68,10 @@ async function materials(){
      Object.assign(item,r.material);
     }
    }
+   const [freshFolders,freshItems]=await Promise.all([api("/api/folders"),api("/api/materials")]);
+   folders.splice(0,folders.length,...freshFolders.folders);
+   map.clear();for(const folder of folders)map.set(folder.$id,folder);
+   items.splice(0,items.length,...freshItems.materials);
   };
   const preview=async item=>{
    const jwt=await token(),res=await fetch("/api/materials/"+item.$id+"/file",{headers:{Authorization:"Bearer "+jwt}});
