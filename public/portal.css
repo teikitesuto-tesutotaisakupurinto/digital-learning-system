@@ -177,3 +177,6 @@ footer{background:#f9fbfd;border-color:var(--line);color:#9aa5b3;font-size:9px;l
 .dashboard-shortcuts small{font-size:9px;color:#8794a5;line-height:1.5}
 @media(max-width:1000px){.dashboard-intro{grid-template-columns:1fr}.dashboard-shortcuts{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:650px){.dashboard-intro{padding:18px;gap:16px}.dashboard-shortcuts{grid-template-columns:1fr}.dashboard-shortcuts a{min-height:58px}}
+
+.menu-link{display:block;padding:9px 12px;color:#40546d;text-decoration:none;font-size:11px;font-weight:650;border-radius:6px}
+.menu-link:hover{background:#f1f5f9;color:#1e4f7d;text-decoration:none}
