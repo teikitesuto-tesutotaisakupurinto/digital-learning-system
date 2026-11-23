@@ -25,7 +25,7 @@ app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use((req,res,next)=>{
   res.setHeader("X-Content-Type-Options","nosniff");
-  res.setHeader("X-Frame-Options","DENY");
+  res.setHeader("X-Frame-Options","SAMEORIGIN");
   res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy","camera=(), microphone=(), geolocation=()");
   res.setHeader("Cross-Origin-Resource-Policy","same-origin");
@@ -423,15 +423,17 @@ async function authenticate(req, res, next) {
       .setJWT(token);
     const account = new sdk.Account(userClient);
     const authUser = await account.get();
-    const profile = await getProfile(authUser);
+    const profile=await getProfile(authUser);
 
-    if (!profile) {
+    if(!profile){
       return res.status(403).json({
         error: "このアカウントには利用権限がありません。管理者に登録を依頼してください。"
       });
     }
-    if (profile.status !== "active") {
-      return res.status(403).json({ error: "このアカウントは停止されています。" });
+    if(profile.status!=="active")return res.status(403).json({error:"このアカウントは停止されています。"});
+    if(profile.schoolId){
+      const school=await getRow("schools",profile.schoolId).catch(()=>null);
+      if(!school||school.status!=="active")return res.status(403).json({error:"この学校のサービス利用は停止されています。"});
     }
 
     req.authUser=authUser;
@@ -587,6 +589,21 @@ function requirePlatformAdmin(req,res,next){
   if(!allowlist.includes(String(req.authUser?.email||"").toLowerCase()))return res.status(403).json({error:"プラットフォーム管理者のみ実行できます。"});
   next();
 }
+app.get("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res)=>{
+  try{
+    const result=await listRows("schools",[],500);
+    res.json({success:true,schools:result.rows.map(row=>({id:row.$id,name:row.name,status:row.status,plan:row.plan||"standard"}))});
+  }catch(error){res.status(500).json({error:"学校一覧を取得できませんでした。"});}
+});
+app.patch("/api/platform/schools/:id/status",authenticate,requirePlatformAdmin,async(req,res)=>{
+  const status=String(req.body.status||"");
+  if(!["active","suspended"].includes(status))return res.status(400).json({error:"学校ステータスが不正です。"});
+  try{
+    const school=await getRow("schools",req.params.id);
+    const updated=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id,data:{status}});
+    res.json({success:true,school:{id:updated.$id,name:updated.name,status:updated.status}});
+  }catch(error){res.status(404).json({error:"学校が見つかりません。"});}
+});
 app.post("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res)=>{
   const schoolName=String(req.body.schoolName||"").trim();
   const email=String(req.body.email||"").trim().toLowerCase();
