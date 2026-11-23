@@ -180,3 +180,7 @@ footer{background:#f9fbfd;border-color:var(--line);color:#9aa5b3;font-size:9px;l
 
 .menu-link{display:block;padding:9px 12px;color:#40546d;text-decoration:none;font-size:11px;font-weight:650;border-radius:6px}
 .menu-link:hover{background:#f1f5f9;color:#1e4f7d;text-decoration:none}
+
+/* Simplified workspace styling */
+.topbar{padding:0 24px}.brand{font-size:15px}.topbar-brand{display:flex;align-items:center}.topbar-right{gap:14px}.user-menu summary{border:0;padding:8px 2px}.account-chevron{margin-left:5px}.sidebar{padding:14px 10px}.sidebar a{border-radius:3px;padding:9px 11px}.content{padding:24px 30px}.page-head{margin-bottom:18px}.page-head h1{font-size:21px;font-weight:600}.panel{border-radius:4px;padding:18px;margin-bottom:14px}.stat{border-radius:4px;padding:13px}.stat strong{font-size:23px}.teacher-actions{display:flex;gap:22px;flex-wrap:wrap;margin:0 0 18px;padding:0 2px}.teacher-actions a{color:#315b83;text-decoration:none;font-size:13px}.teacher-actions a:hover{text-decoration:underline}.teacher-actions a+a{border-left:1px solid #d8dee6;padding-left:22px}.panel h2{font-size:14px;font-weight:650}.sidebar a:hover,.sidebar a.active{background:#eef1f4;color:#233c56}
+@media(max-width:650px){.topbar{padding:0 14px}.content{padding:16px 12px}.teacher-actions{gap:12px}.teacher-actions a+a{padding-left:12px}}
