@@ -199,14 +199,41 @@ async function distribution(){
  }catch(e){notice(e.message)}
 }
 async function progress(){
- shell("提出状況・添削",teacherLinks);const v=$("#view");
+ shell("クラス別・学習進捗",teacherLinks);const v=$("#view");let classStream=null,refreshTimer=null;
  try{
-  const [cr,mr]=await Promise.all([api("/api/classes"),api("/api/materials")]),names=new Map(mr.materials.map(x=>[x.$id,x.title]));
-  v.innerHTML='<section class="panel"><label class="field">クラス<select id="class-select">'+cr.classes.map(x=>'<option value="'+x.$id+'">'+esc(x.name)+'</option>').join("")+'</select></label><div id="progress-list"></div></section>';
-  const load=async()=>{const d=await api("/api/classes/"+$("#class-select").value+"/progress");$("#progress-list").innerHTML=d.students.map(st=>'<section class="progress-student"><h3>'+esc(st.studentName||st.studentId)+'</h3><div class="table-wrap"><table><thead><tr><th>教材</th><th>状態</th><th>学習時間</th><th>提出日時</th><th></th></tr></thead><tbody>'+st.assignments.map(a=>{const sub=a.submission,status=sub?sub.status:a.status,label={locked:"配信前",available:"未着手",in_progress:"学習中",submitted:"提出済み",returned:"再提出",passed:"確認済み"}[status]||status;return '<tr><td>'+esc(names.get(a.materialId)||"教材")+'</td><td>'+label+'</td><td>'+Math.floor((a.studySeconds||0)/3600)+'時間'+String(Math.floor(((a.studySeconds||0)%3600)/60)).padStart(2,"0")+'分</td><td>'+(sub?.submittedAt?new Date(sub.submittedAt).toLocaleString("ja-JP"):"—")+'</td><td>'+(sub?'<a href="/teacher/grading.html?id='+encodeURIComponent(sub.$id)+'">答案を開く</a> <a href="/teacher/grading.html?id='+encodeURIComponent(sub.$id)+'&live=1">リアルタイム確認</a>':"未着手")+'</td></tr>'}).join("")+'</tbody></table></div></section>').join("")||"在籍生徒はいません。"};
-  $("#class-select").onchange=load;if(cr.classes.length)await load();else $("#progress-list").textContent="先にクラスを作成してください。";
+  const cr=await api("/api/classes");
+  v.innerHTML='<section class="panel"><label class="field">クラス<select id="class-select">'+cr.classes.map(x=>'<option value="'+x.$id+'">'+esc(x.name)+'</option>').join("")+'</select></label><div class="muted small" id="class-live-status">クラス全体の状況を読み込んでいます。</div></section><div id="progress-list" class="class-progress-grid"></div>';
+  const load=async()=>{
+   if(refreshTimer)clearTimeout(refreshTimer);
+   const classId=$("#class-select").value;if(!classId)return;
+   const d=await api("/api/classes/"+classId+"/progress");
+   const statusLabel={locked:"配信前",available:"未着手",in_progress:"学習中",submitted:"提出済み",returned:"再提出",passed:"確認済み"};
+   $("#progress-list").innerHTML=d.students.map(st=>{
+    const items=st.assignments.map(a=>{
+     const sub=a.submission,state=sub?sub.status:a.status,seconds=a.studySeconds||0;
+     const live=sub?'<a href="/teacher/grading.html?id='+encodeURIComponent(sub.$id)+'&live=1">答案をライブで見る</a>':"答案なし";
+     return '<div class="class-progress-item"><div class="class-progress-item-title">'+esc(a.materialTitle||a.material?.title||"教材")+'</div><div class="class-progress-meta"><span>'+esc(statusLabel[state]||state)+'</span><span>'+Math.floor(seconds/60)+'分学習</span></div><div class="class-progress-actions">'+live+'</div></div>';
+    }).join("");
+    const total=st.assignments.length,done=st.assignments.filter(a=>["submitted","returned","passed"].includes(a.submission?.status||a.status)).length,active=st.assignments.some(a=>a.submission?.status==="in_progress"||a.status==="in_progress");
+    return '<article class="class-student-tile"><div class="class-student-tile-head"><div><h3>'+esc(st.studentName||st.studentId)+'</h3><span class="muted small">'+total+'教材</span></div><span class="class-student-state">'+(active?"学習中":done===total&&total?"提出・確認済み":"進捗確認")+'</span></div><div class="class-student-summary"><strong>'+done+'</strong><span>/ '+total+' 完了・提出</span></div><div class="class-student-items">'+items+'</div></article>';
+   }).join("")||'<section class="panel">このクラスに在籍している生徒はいません。</section>';
+   $("#class-live-status").textContent="クラス全員の状況を表示中。更新はリアルタイムで反映されます。";
+  };
+  const connect=async()=>{
+   if(classStream){classStream.close();classStream=null}
+   const classId=$("#class-select").value;if(!classId)return;
+   await load();
+   const jwt=await token();classStream=new EventSource("/api/teacher/class-stream/"+encodeURIComponent(classId)+"?token="+encodeURIComponent(jwt));
+   classStream.addEventListener("refresh",()=>load().catch(e=>notice(e.message)));
+   classStream.onerror=()=>{$("#class-live-status").textContent="リアルタイム接続を再接続しています…"};
+   classStream.onopen=()=>{$("#class-live-status").textContent="リアルタイム接続中 · クラス全員の状況を表示"};
+  };
+  $("#class-select").onchange=()=>connect().catch(e=>notice(e.message));
+  if(cr.classes.length)await connect();else $("#progress-list").textContent="先にクラスを作成してください。";
+  window.addEventListener("pagehide",()=>{if(classStream)classStream.close()});
  }catch(e){notice(e.message)}
 }
+
 async function student(){
  shell("学習ホーム",studentLinks);const v=$("#view");
  try{
@@ -238,7 +265,7 @@ async function grading(){
   if(liveMode){
    const status=document.createElement("div");status.className="panel";status.id="live-status";status.textContent="接続中…";v.querySelector(".grading-main").insertBefore(status,v.querySelector(".toolbar"));
    const refreshLive=async()=>{try{const live=await api("/api/teacher/live/"+d.assignment.$id);await editor.refreshStudentData(live.pages);status.textContent=(live.active?(live.isDrawing?"生徒が書き込み中":"生徒が教材を閲覧中"):"現在はオフライン")+(live.activePageNo?" ／ "+live.activePageNo+"ページ目":"")+(live.lastSeenAt?" ／ 最終更新 "+new Date(live.lastSeenAt).toLocaleTimeString("ja-JP"):"")}catch(err){status.textContent="ライブ更新に失敗しました："+err.message}};
-   await refreshLive();const liveTimer=setInterval(refreshLive,2000);window.addEventListener("pagehide",()=>clearInterval(liveTimer));
+   await refreshLive();const jwt=await token();const liveStream=new EventSource("/api/teacher/live-stream/"+encodeURIComponent(d.assignment.$id)+"?token="+encodeURIComponent(jwt));liveStream.addEventListener("refresh",()=>refreshLive());liveStream.onerror=()=>{status.textContent="リアルタイム接続を再接続しています…"};liveStream.onopen=()=>{status.textContent="リアルタイム接続中"};window.addEventListener("pagehide",()=>liveStream.close());
   }
   $("#teacher-pen").onclick=()=>{editor.setMode("pen");$("#teacher-pen").setAttribute("aria-pressed","true");$("#teacher-eraser").setAttribute("aria-pressed","false")};$("#teacher-eraser").onclick=()=>{editor.setMode("eraser");$("#teacher-pen").setAttribute("aria-pressed","false");$("#teacher-eraser").setAttribute("aria-pressed","true")};$("#teacher-color").oninput=e=>editor.setColor(e.target.value);$("#teacher-width").oninput=e=>editor.setWidth(Number(e.target.value));$("#teacher-undo").onclick=()=>editor.undo().catch(e=>notice(e.message));$("#teacher-prev").onclick=()=>editor.move(-1).catch(e=>notice(e.message));$("#teacher-next").onclick=()=>editor.move(1).catch(e=>notice(e.message));
   const cr=await api("/api/submissions/"+id+"/comments");const renderComments=()=>{$("#comment-list").innerHTML=cr.comments.map(x=>'<div class="list-item"><span>'+esc(x.body)+'</span><span class="muted small">'+esc(x.authorRole)+'</span></div>').join("")||"コメントはありません。"};renderComments();
