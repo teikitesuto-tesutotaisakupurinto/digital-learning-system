@@ -24,12 +24,13 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;p
 <div id="notice" class="notice" role="status"></div>
 <section class="panel"><h2>新しい学校を登録</h2><form id="create-form" class="form">
 <label class="field">学校・塾名<input name="schoolName" maxlength="255" required></label>
+<label class="field">ログインURL識別子<input name="slug" maxlength="64" pattern="[a-z0-9]+([\\-][a-z0-9]+)*" placeholder="teiki-test" required><span class="muted">英小文字・数字・ハイフン。例：teiki-test</span></label>
 <label class="field">初期管理者名<input name="name" maxlength="255" required></label>
 <label class="field">初期管理者メールアドレス<input name="email" type="email" required></label>
 <label class="field">初期パスワード（12文字以上）<input name="password" type="password" minlength="12" autocomplete="new-password" required></label>
 <div class="wide"><button class="primary" type="submit">学校環境を作成</button></div>
 </form></section>
-<section class="panel"><h2>登録済みの学校</h2><div class="muted">学校単位でデータが分離されています。利用停止中の学校はログインできません。</div><div style="overflow:auto;margin-top:14px"><table><thead><tr><th>学校名</th><th>プラン</th><th>状態</th><th>操作</th></tr></thead><tbody id="school-rows"><tr><td colspan="4">読み込み中…</td></tr></tbody></table></div></section>
+<section class="panel"><h2>登録済みの学校</h2><div class="muted">学校単位でデータが分離されています。利用停止中の学校はログインできません。</div><div style="overflow:auto;margin-top:14px"><table><thead><tr><th>学校名</th><th>専用ログインURL</th><th>プラン</th><th>状態</th><th>操作</th></tr></thead><tbody id="school-rows"><tr><td colspan="4">読み込み中…</td></tr></tbody></table></div></section>
 </main>
 <script type="module">
 import {Client,Account} from "https://cdn.jsdelivr.net/npm/appwrite@17.0.0/+esm";
@@ -39,9 +40,9 @@ const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replac
 let jwt="";
 async function api(url,options={}){if(!jwt)jwt=(await account.createJWT()).jwt;const headers={Authorization:"Bearer "+jwt,...(options.headers||{})};if(options.body)headers["Content-Type"]="application/json";const r=await fetch(url,{...options,headers});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||"処理に失敗しました。");return data}
 function notice(message){$("#notice").textContent=message;$("#notice").classList.add("show")}
-async function load(){const d=await api("/api/platform/schools");$("#school-rows").innerHTML=d.schools.map(s=>'<tr><td><strong>'+esc(s.name)+'</strong></td><td>'+esc(s.plan)+'</td><td><span class="status '+(s.status==="active"?"":"off")+'">'+(s.status==="active"?"利用中":"利用停止")+'</span></td><td><button type="button" data-id="'+esc(s.id)+'" data-next="'+(s.status==="active"?"suspended":"active")+'">'+(s.status==="active"?"利用停止":"利用再開")+'</button></td></tr>').join("")||'<tr><td colspan="4">学校はまだ登録されていません。</td></tr>';document.querySelectorAll("[data-id]").forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api("/api/platform/schools/"+encodeURIComponent(b.dataset.id)+"/status",{method:"PATCH",body:JSON.stringify({status:b.dataset.next})});await load()}catch(e){notice(e.message);b.disabled=false}})}
+async function load(){const d=await api("/api/platform/schools");$("#school-rows").innerHTML=d.schools.map(s=>'<tr><td><strong>'+esc(s.name)+'</strong></td><td><a href="/'+encodeURIComponent(s.slug)+'/login" target="_blank" rel="noopener">/'+esc(s.slug)+'/login</a></td><td>'+esc(s.plan)+'</td><td><span class="status '+(s.status==="active"?"":"off")+'">'+(s.status==="active"?"利用中":"利用停止")+'</span></td><td><button type="button" data-id="'+esc(s.id)+'" data-next="'+(s.status==="active"?"suspended":"active")+'">'+(s.status==="active"?"利用停止":"利用再開")+'</button></td></tr>').join("")||'<tr><td colspan="5">学校はまだ登録されていません。</td></tr>';document.querySelectorAll("[data-id]").forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api("/api/platform/schools/"+encodeURIComponent(b.dataset.id)+"/status",{method:"PATCH",body:JSON.stringify({status:b.dataset.next})});await load()}catch(e){notice(e.message);b.disabled=false}})}
 try{const me=await api("/api/me");if(!me.user.platformAdmin)throw new Error("このアカウントにはプラットフォーム管理権限がありません。");await load()}catch(e){notice(e.message);$("#create-form").querySelectorAll("input,button").forEach(x=>x.disabled=true)}
-$("#create-form").onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector("button");b.disabled=true;try{const body=Object.fromEntries(new FormData(e.currentTarget));const d=await api("/api/platform/schools",{method:"POST",body:JSON.stringify(body)});notice(d.school.name+" の学校環境と初期管理者を作成しました。");e.currentTarget.reset();await load()}catch(err){notice(err.message)}finally{b.disabled=false}};
+$("#create-form").onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector("button");b.disabled=true;try{const body=Object.fromEntries(new FormData(e.currentTarget));const d=await api("/api/platform/schools",{method:"POST",body:JSON.stringify(body)});notice(d.school.name+" の学校環境を作成しました。ログインURL："+location.origin+d.school.loginUrl);e.currentTarget.reset();await load()}catch(err){notice(err.message)}finally{b.disabled=false}};
 $("#logout").onclick=async()=>{try{await account.deleteSession("current")}catch{}location.replace("/login.html")};
 </script>
 </body></html>
