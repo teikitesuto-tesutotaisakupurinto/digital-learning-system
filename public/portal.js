@@ -97,7 +97,7 @@ async function grading(){
    const wrap=document.createElement("div");wrap.className="page-wrap";wrap.style.width=vp.width+"px";wrap.style.height=vp.height+"px";
    const base=document.createElement("canvas");base.width=vp.width;base.height=vp.height;
    const ink=document.createElement("canvas");ink.className="ink";ink.width=vp.width;ink.height=vp.height;wrap.append(base,ink);stage.append(wrap);
-   await page.render({canvas:base,viewport:vp}).promise;
+   await page.render({canvasContext:base.getContext("2d"),viewport:vp}).promise;
    const ctx=ink.getContext("2d"),entry=saved.get(pageNo)||{student:[],teacher:[]};teacherStrokes=entry.teacher;
    drawStrokes(ctx,entry.student);drawStrokes(ctx,teacherStrokes);
    $("#teacher-page").textContent=pageNo+" / "+pdf.numPages;
@@ -140,7 +140,7 @@ async function workspace(){
    const wrap=document.createElement("div");wrap.className="page-wrap";wrap.style.width=vp.width+"px";wrap.style.height=vp.height+"px";
    const base=document.createElement("canvas");base.width=vp.width;base.height=vp.height;
    const ink=document.createElement("canvas");ink.className="ink";ink.width=vp.width;ink.height=vp.height;wrap.append(base,ink);stage.append(wrap);
-   await page.render({canvas:base,viewport:vp}).promise;
+   await page.render({canvasContext:base.getContext("2d"),viewport:vp}).promise;
    const ctx=ink.getContext("2d"),entry=saved.get(pageNo)||{student:[],teacher:[]};strokes=entry.student;
    const paint=()=>{ctx.clearRect(0,0,ink.width,ink.height);drawItems(ctx,strokes);drawItems(ctx,entry.teacher)};
    paint();$("#page-label").textContent=pageNo+" / "+pdf.numPages;
