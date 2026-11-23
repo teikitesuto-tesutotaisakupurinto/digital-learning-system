@@ -58,6 +58,7 @@ const schemas = {
     name: "Schools",
     columns: [
       ["name", "varchar", 255, true],
+      ["slug", "varchar", 64, false],
       ["status", "enum", ["active", "suspended"], true],
       ["createdBy", "varchar", 36, false],
       ["plan", "varchar", 40, false]
@@ -384,6 +385,17 @@ async function updateRow(tableId,rowId,data) {
   return tablesDB.updateRow({databaseId:DATABASE_ID,tableId,rowId,data});
 }
 
+function normalizeSchoolSlug(value) {
+  return String(value || "").trim().toLowerCase();
+}
+function isValidSchoolSlug(value) {
+  return /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(value);
+}
+async function findSchoolBySlug(slug) {
+  const result = await tablesDB.listRows({databaseId:DATABASE_ID,tableId:"schools",queries:[Query.equal("slug",slug),Query.limit(1)]});
+  return result.rows[0] || null;
+}
+
 // Create the initial school and attach all pre-existing records to it.
 // This migration is additive: no existing user, class, material or submission is deleted.
 async function ensureDefaultSchool() {
@@ -392,12 +404,16 @@ async function ensureDefaultSchool() {
   if(!school) {
     school=await tablesDB.createRow({
       databaseId:DATABASE_ID,tableId:"schools",rowId:ID.unique(),
-      data:{name:String(process.env.SCHOOL_NAME||"導入校").trim().slice(0,255),status:"active",createdBy:"system",plan:"standard"},
+      data:{name:String(process.env.SCHOOL_NAME||"導入校").trim().slice(0,255),slug:normalizeSchoolSlug(process.env.SCHOOL_SLUG||"main"),status:"active",createdBy:"system",plan:"standard"},
       permissions:[]
     });
-  } else if(process.env.SCHOOL_NAME && school.name==="導入校") {
-    school=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id,data:{name:String(process.env.SCHOOL_NAME).trim().slice(0,255)}});
+  } else {
+    const updates={};
+    if(process.env.SCHOOL_NAME && school.name==="導入校")updates.name=String(process.env.SCHOOL_NAME).trim().slice(0,255);
+    if(!school.slug)updates.slug=normalizeSchoolSlug(process.env.SCHOOL_SLUG||"main");
+    if(Object.keys(updates).length)school=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id,data:updates});
   }
+  if(!isValidSchoolSlug(school.slug||""))throw new Error("SCHOOL_SLUG must be a valid URL slug (lowercase letters, numbers, hyphens).");
   DEFAULT_SCHOOL_ID=school.$id;
   for(const tableId of TENANT_TABLES) {
     let cursor=null;
@@ -478,6 +494,13 @@ async function authenticate(req, res, next) {
       });
     }
     if(profile.status!=="active")return res.status(403).json({error:"このアカウントは停止されています。"});
+    const expectedSchoolSlug=normalizeSchoolSlug(req.headers["x-school-slug"]);
+    if(expectedSchoolSlug){
+      const expectedSchool=await findSchoolBySlug(expectedSchoolSlug);
+      if(!expectedSchool||expectedSchool.status!=="active"||expectedSchool.$id!==profile.schoolId){
+        return res.status(403).json({error:"このログインURLは、登録された所属学校と一致しません。学校専用URLをご確認ください。"});
+      }
+    }
     if(profile.schoolId){
       const school=await getRow("schools",profile.schoolId).catch(()=>null);
       if(!school||school.status!=="active")return res.status(403).json({error:"この学校のサービス利用は停止されています。"});
@@ -615,10 +638,21 @@ app.get("/api/health",(req,res)=>{
   res.json({success:true,service:"digital-learning-system",status:"ok",timestamp:new Date().toISOString()});
 });
 
+app.get("/api/public/schools/:slug",async(req,res)=>{
+  const slug=normalizeSchoolSlug(req.params.slug);
+  if(!isValidSchoolSlug(slug))return res.status(404).json({error:"学校が見つかりません。"});
+  try{
+    const school=await findSchoolBySlug(slug);
+    if(!school||school.status!=="active")return res.status(404).json({error:"学校が見つかりません。"});
+    res.setHeader("Cache-Control","public, max-age=60");
+    res.json({success:true,school:{name:school.name,slug:school.slug}});
+  }catch(error){res.status(500).json({error:"学校情報を取得できませんでした。"});}
+});
+
 app.get("/api/school",authenticate,requireRole("teacher"),async(req,res)=>{
   try{
     const school=await getRow("schools",req.profile.schoolId);
-    res.json({success:true,school:{id:school.$id,name:school.name,status:school.status,plan:school.plan||"standard"}});
+    res.json({success:true,school:{id:school.$id,name:school.name,slug:school.slug,status:school.status,plan:school.plan||"standard"}});
   }catch(error){res.status(404).json({error:"所属校舎情報を取得できませんでした。"});}
 });
 app.patch("/api/school",authenticate,requireRole("teacher"),async(req,res)=>{
@@ -653,20 +687,22 @@ app.patch("/api/platform/schools/:id/status",authenticate,requirePlatformAdmin,a
 });
 app.post("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res)=>{
   const schoolName=String(req.body.schoolName||"").trim();
+  const slug=normalizeSchoolSlug(req.body.slug);
   const email=String(req.body.email||"").trim().toLowerCase();
   const name=String(req.body.name||"").trim();
   const password=String(req.body.password||"");
-  if(!schoolName||schoolName.length>255||!email||!name||password.length<12){
-    return res.status(400).json({error:"学校名・管理者名・メールアドレス・12文字以上の初期パスワードを指定してください。"});
+  if(!schoolName||schoolName.length>255||!isValidSchoolSlug(slug)||!email||!name||password.length<12){
+    return res.status(400).json({error:"学校名・有効なURL識別子・管理者名・メールアドレス・12文字以上の初期パスワードを指定してください。"});
   }
   let school=null,authUser=null;
   try{
-    school=await tablesDB.createRow({databaseId:DATABASE_ID,tableId:"schools",rowId:ID.unique(),data:{name:schoolName,status:"active",createdBy:req.authUser.$id,plan:"standard"},permissions:[]});
+    if(await findSchoolBySlug(slug))return res.status(409).json({error:"このログインURL識別子は既に使用されています。"});
+    school=await tablesDB.createRow({databaseId:DATABASE_ID,tableId:"schools",rowId:ID.unique(),data:{name:schoolName,slug,status:"active",createdBy:req.authUser.$id,plan:"standard"},permissions:[]});
     authUser=await users.create({userId:ID.unique(),email,password,name});
     const profile=await tenantContext.run(school.$id,()=>createRow("users",{
       authUserId:authUser.$id,email,displayName:name,role:"teacher",status:"active"
     }));
-    res.status(201).json({success:true,school:{id:school.$id,name:school.name},owner:{id:profile.authUserId,email:profile.email,name:profile.displayName}});
+    res.status(201).json({success:true,school:{id:school.$id,name:school.name,slug:school.slug,loginUrl:"/"+school.slug+"/login"},owner:{id:profile.authUserId,email:profile.email,name:profile.displayName}});
   }catch(error){
     if(authUser)await users.delete({userId:authUser.$id}).catch(()=>{});
     if(school)await tablesDB.deleteRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id}).catch(()=>{});
@@ -686,6 +722,7 @@ app.get("/api/me",authenticate,async(req,res)=>{
       name:req.profile.displayName,
       role:req.profile.role,
       schoolName:school?.name||"",
+      schoolSlug:school?.slug||"",
       platformAdmin:allowlist.includes(String(req.authUser.email||"").toLowerCase())
     }
   });
@@ -1667,6 +1704,18 @@ app.get("/login.html", (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "login.html"), error => {
     if (error && !res.headersSent) res.status(404).type("text").send("Login page file is missing from the deployed public directory.");
   });
+});
+app.get("/:schoolSlug/login", async (req,res)=>{
+  const slug=normalizeSchoolSlug(req.params.schoolSlug);
+  if(!isValidSchoolSlug(slug))return res.status(404).type("text").send("学校専用ログインURLが見つかりません。");
+  try{
+    const school=await findSchoolBySlug(slug);
+    if(!school||school.status!=="active")return res.status(404).type("text").send("学校専用ログインURLが見つからないか、現在利用できません。");
+    res.setHeader("Cache-Control","no-store");
+    res.sendFile(path.join(PUBLIC_DIR,"login.html"),error=>{
+      if(error&&!res.headersSent)res.status(404).type("text").send("Login page file is missing from the deployed public directory.");
+    });
+  }catch(error){res.status(500).type("text").send("学校情報を確認できませんでした。");}
 });
 app.get("/", (req, res) => res.redirect(302, "/login.html"));
 app.use(express.static(PUBLIC_DIR, { extensions: ["html"], index: false }));
