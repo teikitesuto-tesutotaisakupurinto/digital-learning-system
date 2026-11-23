@@ -36,6 +36,7 @@ function connectClassStream(classId,onRefresh,onStatus){
       if(eventLine&&eventLine.slice(6).trim()==="refresh")onRefresh();
      }
     }
+    if(!stopped){onStatus(false);await wait(1800);}
    }catch(error){
     if(stopped||error.name==="AbortError")break;
     onStatus(false);
