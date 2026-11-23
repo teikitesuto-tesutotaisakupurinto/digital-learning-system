@@ -1717,6 +1717,7 @@ app.get("/:schoolSlug/login", async (req,res)=>{
     });
   }catch(error){res.status(500).type("text").send("学校情報を確認できませんでした。");}
 });
+app.get("/platform", (req, res) => res.redirect(302, "/platform/schools.html"));
 app.get("/", (req, res) => res.redirect(302, "/login.html"));
 app.use(express.static(PUBLIC_DIR, { extensions: ["html"], index: false }));
 
