@@ -46,7 +46,7 @@ const schemas = {
       ["authUserId", "varchar", 36, true],
       ["email", "varchar", 320, true],
       ["displayName", "varchar", 255, true],
-      ["role", "enum", ["admin", "teacher", "student"], true],
+      ["role", "enum", ["teacher", "student"], true],
       ["status", "enum", ["active", "suspended"], true]
     ]
   },
@@ -282,38 +282,34 @@ function updateRow(tableId, rowId, data) {
 
 // The first authenticated account is promoted to the initial administrator.
 // This runs only while the application users table is completely empty.
-let bootstrapAdminPromise = null;
+// One-time first-account bootstrap: the first registered application user becomes a teacher.
+let bootstrapTeacherPromise = null;
 
 async function getProfile(authUser) {
   const found = await listRows("users", [Query.equal("authUserId", authUser.$id)], 1);
   if (found.rows.length) return found.rows[0];
 
-  if (!bootstrapAdminPromise) {
-    bootstrapAdminPromise = (async () => {
+  if (!bootstrapTeacherPromise) {
+    bootstrapTeacherPromise = (async () => {
       const existingProfiles = await listRows("users", [], 1);
       if (existingProfiles.rows.length) return null;
-
       return createRow("users", {
         authUserId: authUser.$id,
         email: authUser.email,
         displayName: authUser.name || authUser.email,
-        role: "admin",
+        role: "teacher",
         status: "active"
       });
-    })().finally(() => {
-      bootstrapAdminPromise = null;
-    });
+    })().finally(() => { bootstrapTeacherPromise = null; });
   }
 
-  const createdProfile = await bootstrapAdminPromise;
-  if (createdProfile && createdProfile.authUserId === authUser.$id) {
-    console.log("Initial administrator created for: " + authUser.email);
-    return createdProfile;
+  const created = await bootstrapTeacherPromise;
+  if (created && created.authUserId === authUser.$id) {
+    console.log("Initial teacher profile created for: " + authUser.email);
+    return created;
   }
-
-  // Another request may have completed the one-time bootstrap first.
-  const afterBootstrap = await listRows("users", [Query.equal("authUserId", authUser.$id)], 1);
-  return afterBootstrap.rows[0] || null;
+  const after = await listRows("users", [Query.equal("authUserId", authUser.$id)], 1);
+  return after.rows[0] || null;
 }
 
 async function authenticate(req, res, next) {
@@ -384,7 +380,7 @@ async function ensureSubmission(assignment) {
 }
 
 async function canReadAssignment(req, assignment) {
-  if (req.profile.role === "admin" || req.profile.role === "teacher") return true;
+  if (req.profile.role === "teacher") return true;
   return assignment.studentId === req.authUser.$id;
 }
 
@@ -424,28 +420,6 @@ async function getSystemSetting(key) {
   return result.rows[0] || null;
 }
 
-/* Maintenance gate for authenticated non-admin users */
-app.use("/api", async (req, res, next) => {
-  if (req.path === "/health" || req.path === "/system/status" || req.path.startsWith("/admin")) return next();
-  try {
-    const setting = await getSystemSetting("maintenance");
-    if (setting && setting.settingValue === "true") {
-      const header = req.headers.authorization || "";
-      const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-      if (token) {
-        const userClient = new sdk.Client().setEndpoint(ENDPOINT).setProject(PROJECT_ID).setJWT(token);
-        const authUser = await new sdk.Account(userClient).get();
-        const profile = await getProfile(authUser);
-        if (profile && profile.role === "admin") return next();
-      }
-      return res.status(503).json({ error: "現在システムメンテナンス中です。" });
-    }
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
-
 /* Health */
 app.get("/api/health", (req, res) => {
   res.json({
@@ -469,11 +443,11 @@ app.get("/api/me", authenticate, (req, res) => {
 });
 
 /* Users */
-app.get("/api/users", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.get("/api/users", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const role = req.query.role;
     const queries = [];
-    if (role && ["admin", "teacher", "student"].includes(role)) queries.push(Query.equal("role", role));
+    if (role && ["teacher", "teacher", "student"].includes(role)) queries.push(Query.equal("role", role));
     const result = await listRows("users", queries, 100);
     res.json({ success: true, users: result.rows });
   } catch (error) {
@@ -482,7 +456,7 @@ app.get("/api/users", authenticate, requireRole("admin", "teacher"), async (req,
   }
 });
 
-app.post("/api/users", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.post("/api/users", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   try {
     const email = String(req.body.email || "").trim().toLowerCase();
     const name = String(req.body.name || "").trim();
@@ -492,10 +466,10 @@ app.post("/api/users", authenticate, requireRole("admin", "teacher"), async (req
     if (!email || !name || password.length < 8) {
       return res.status(400).json({ error: "メール・氏名・8文字以上のパスワードを入力してください。" });
     }
-    if (!["admin", "teacher", "student"].includes(role)) {
+    if (!["student"].includes(role)) {
       return res.status(400).json({ error: "指定された権限は使用できません。" });
     }
-    if (req.profile.role !== "admin" && role !== "student") {
+    if (role !== "student") {
       return res.status(403).json({ error: "先生は生徒アカウントのみ作成できます。" });
     }
 
@@ -521,7 +495,7 @@ app.post("/api/users", authenticate, requireRole("admin", "teacher"), async (req
   }
 });
 
-app.patch("/api/users/:id/status", authenticate, requireRole("admin"), async (req, res) => {
+app.patch("/api/users/:id/status", authenticate, requireRole("teacher"), async (req, res) => {
   const status = req.body.status;
   if (!["active", "suspended"].includes(status)) {
     return res.status(400).json({ error: "statusが不正です。" });
@@ -554,7 +528,7 @@ app.get("/api/classes", authenticate, async (req, res) => {
   }
 });
 
-app.post("/api/classes", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.post("/api/classes", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   const name = String(req.body.name || "").trim();
   const description = String(req.body.description || "").trim();
   if (!name) return res.status(400).json({ error: "クラス名を入力してください。" });
@@ -573,7 +547,7 @@ app.post("/api/classes", authenticate, requireRole("admin", "teacher"), async (r
   }
 });
 
-app.get("/api/classes/:id/students", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.get("/api/classes/:id/students", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   try {
     const rows = await listRows("enrollments", [
       Query.equal("classId", req.params.id),
@@ -585,7 +559,7 @@ app.get("/api/classes/:id/students", authenticate, requireRole("admin", "teacher
   }
 });
 
-app.post("/api/classes/:id/students", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.post("/api/classes/:id/students", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   const studentId = String(req.body.studentId || "").trim();
   if (!studentId) return res.status(400).json({ error: "生徒を選択してください。" });
   try {
@@ -615,12 +589,12 @@ app.post("/api/classes/:id/students", authenticate, requireRole("admin", "teache
 });
 
 /* Material folders */
-app.get("/api/folders", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.get("/api/folders", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   const rows = await listRows("folders", [], 100);
   res.json({ success: true, folders: rows.rows });
 });
 
-app.post("/api/folders", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.post("/api/folders", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   const name = String(req.body.name || "").trim();
   const parentId = String(req.body.parentId || "").trim() || null;
   if (!name) return res.status(400).json({ error: "フォルダー名を入力してください。" });
@@ -639,12 +613,12 @@ app.post("/api/folders", authenticate, requireRole("admin", "teacher"), async (r
 });
 
 /* PDF material library */
-app.get("/api/materials", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.get("/api/materials", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   const result = await listRows("materials", [], 100);
   res.json({ success: true, materials: result.rows });
 });
 
-app.post("/api/materials", authenticate, requireRole("admin", "teacher"), upload.fields([
+app.post("/api/materials", authenticate, requireRole("teacher", "teacher"), upload.fields([
   { name: "file", maxCount: 1 },
   { name: "answerFile", maxCount: 1 }
 ]), async (req, res) => {
@@ -702,7 +676,7 @@ app.get("/api/materials/:id/file", authenticate, async (req, res) => {
     let fileId = material.storageFileId;
 
     if (req.query.answer === "1") {
-      if (!["admin", "teacher"].includes(req.profile.role)) {
+      if (req.profile.role !== "teacher") {
         return res.status(403).json({ error: "解答ファイルを閲覧する権限がありません。" });
       }
       fileId = material.answerFileId;
@@ -732,12 +706,12 @@ app.get("/api/materials/:id/file", authenticate, async (req, res) => {
 });
 
 /* Distribution and assignments */
-app.get("/api/distributions", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.get("/api/distributions", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   const result = await listRows("distributions", [], 100);
   res.json({ success: true, distributions: result.rows });
 });
 
-app.post("/api/distributions", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.post("/api/distributions", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   try {
     const title = String(req.body.title || "").trim();
     const classId = String(req.body.classId || "").trim();
@@ -864,7 +838,7 @@ app.put("/api/submissions/:id/pages/:pageNo", authenticate, async (req, res) => 
       return res.status(403).json({ error: "他の生徒の答案は編集できません。" });
     }
     const pageNo = Math.max(1, Number(req.params.pageNo) || 1);
-    const dataKey = req.profile.role === "teacher" || req.profile.role === "admin"
+    const dataKey = req.profile.role === "teacher" || req.profile.role === "teacher"
       ? "teacherData" : "studentData";
     const json = JSON.stringify(req.body.strokes || []);
     if (json.length > 1500000) return res.status(413).json({ error: "このページの書き込み量が上限を超えています。" });
@@ -910,7 +884,7 @@ app.post("/api/submissions/:id/submit", authenticate, async (req, res) => {
 });
 
 /* Teacher progress and grading */
-app.get("/api/classes/:id/progress", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.get("/api/classes/:id/progress", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   try {
     const enrollments = await listRows("enrollments", [
       Query.equal("classId", req.params.id),
@@ -940,7 +914,7 @@ app.get("/api/classes/:id/progress", authenticate, requireRole("admin", "teacher
   }
 });
 
-app.get("/api/grading/:submissionId", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.get("/api/grading/:submissionId", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   try {
     const submission = await getRow("submissions", req.params.submissionId);
     const assignment = await getRow("assignments", submission.assignmentId);
@@ -964,7 +938,7 @@ app.get("/api/grading/:submissionId", authenticate, requireRole("admin", "teache
   }
 });
 
-app.post("/api/grading/:submissionId", authenticate, requireRole("admin", "teacher"), async (req, res) => {
+app.post("/api/grading/:submissionId", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
   try {
     const submission = await getRow("submissions", req.params.submissionId);
     const assignment = await getRow("assignments", submission.assignmentId);
@@ -1012,7 +986,7 @@ app.post("/api/submissions/:id/comments", authenticate, async (req, res) => {
   if (req.profile.role === "student" && submission.studentId !== req.authUser.$id) {
     return res.status(403).json({ error: "投稿権限がありません。" });
   }
-  if (!["student", "teacher", "admin"].includes(req.profile.role)) {
+  if (!["student", "teacher", "teacher"].includes(req.profile.role)) {
     return res.status(403).json({ error: "投稿権限がありません。" });
   }
   const body = String(req.body.body || "").trim();
@@ -1021,51 +995,10 @@ app.post("/api/submissions/:id/comments", authenticate, async (req, res) => {
     submissionId: submission.$id,
     pageNo: Number(req.body.pageNo) || 1,
     authorId: req.authUser.$id,
-    authorRole: req.profile.role === "admin" ? "teacher" : req.profile.role,
+    authorRole: req.profile.role,
     body
   });
   res.status(201).json({ success: true, comment: row });
-});
-
-/* Admin system controls */
-app.get("/api/admin/overview", authenticate, requireRole("admin"), async (req, res) => {
-  const [userRows, classRows, materialRows, distributionRows] = await Promise.all([
-    listRows("users", [], 1000),
-    listRows("classes", [], 1000),
-    listRows("materials", [], 1000),
-    listRows("distributions", [], 1000)
-  ]);
-  const maintenance = await getSystemSetting("maintenance");
-  res.json({
-    success: true,
-    counts: {
-      users: userRows.total,
-      classes: classRows.total,
-      materials: materialRows.total,
-      distributions: distributionRows.total
-    },
-    maintenance: maintenance ? maintenance.settingValue === "true" : false
-  });
-});
-
-app.post("/api/admin/maintenance", authenticate, requireRole("admin"), async (req, res) => {
-  const value = req.body.enabled ? "true" : "false";
-  const current = await getSystemSetting("maintenance");
-  if (current) {
-    await updateRow("system_settings", current.$id, { settingValue: value });
-  } else {
-    await createRow("system_settings", { settingKey: "maintenance", settingValue: value });
-  }
-  res.json({ success: true, enabled: value === "true" });
-});
-
-app.get("/api/system/status", async (req, res) => {
-  try {
-    const setting = await getSystemSetting("maintenance");
-    res.json({ maintenance: setting ? setting.settingValue === "true" : false });
-  } catch {
-    res.json({ maintenance: false });
-  }
 });
 
 /* Static files and explicit entry routes */
