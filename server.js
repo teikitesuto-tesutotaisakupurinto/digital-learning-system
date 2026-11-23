@@ -1424,21 +1424,6 @@ function addLiveClient(key, response) {
     if (!clients.size) liveStreams.delete(key);
   });
 }
-async function authenticateStream(req, res) {
-  try {
-    const jwt = String(req.query.token || "");
-    if (!jwt) { res.status(401).end(); return null; }
-    const userClient = new sdk.Client().setEndpoint(ENDPOINT).setProject(PROJECT_ID).setJWT(jwt);
-    const authUser = await new sdk.Account(userClient).get();
-    const profile = await getProfile(authUser);
-    if (!profile || profile.status !== "active" || profile.role !== "teacher") {
-      res.status(403).end(); return null;
-    }
-    return { authUser, profile };
-  } catch {
-    res.status(401).end(); return null;
-  }
-}
 function beginEventStream(req, res, key) {
   res.status(200);
   res.set({
@@ -1451,22 +1436,16 @@ function beginEventStream(req, res, key) {
   res.write("event: connected\ndata: {}\n\n");
   addLiveClient(key, res);
 }
-app.get("/api/teacher/live-stream/:assignmentId",async(req,res)=>{
-  const auth=await authenticateStream(req,res);
-  if(!auth)return;
+app.get("/api/teacher/live-stream/:assignmentId",authenticate,requireRole("teacher"),async(req,res)=>{
   try{
     const assignment=await getRow("assignments",req.params.assignmentId);
-    const cls=await getRow("classes",assignment.classId);
-    if(cls.schoolId!==auth.profile.schoolId)return res.status(404).end();
+    if(!(await teacherOwnsAssignment(req,assignment)))return res.status(404).end();
     beginEventStream(req,res,"assignment:"+req.params.assignmentId);
   }catch{res.status(404).end();}
 });
-app.get("/api/teacher/class-stream/:classId",async(req,res)=>{
-  const auth=await authenticateStream(req,res);
-  if(!auth)return;
+app.get("/api/teacher/class-stream/:classId",authenticate,requireRole("teacher"),async(req,res)=>{
   try{
-    const cls=await getRow("classes",req.params.classId);
-    if(cls.schoolId!==auth.profile.schoolId)return res.status(404).end();
+    if(!(await teacherOwnsClass(req,req.params.classId)))return res.status(404).end();
     beginEventStream(req,res,"class:"+req.params.classId);
   }catch{res.status(404).end();}
 });
