@@ -39,7 +39,8 @@ form.addEventListener("submit", async event => {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "このアカウントは利用できません。");
-    if (data.user.role === "teacher") location.replace("/teacher/dashboard.html");
+    if (data.user.platformAdmin) location.replace("/platform/schools.html");
+    else if (data.user.role === "teacher") location.replace("/teacher/dashboard.html");
     else if (data.user.role === "student") location.replace("/student/dashboard.html");
     else throw new Error("アカウントの権限を確認できません。");
   } catch (error) {
