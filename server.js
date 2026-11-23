@@ -716,53 +716,98 @@ app.get("/api/distributions", authenticate, requireRole("teacher"), async (req, 
 app.post("/api/distributions", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const title = String(req.body.title || "").trim();
-    const classId = String(req.body.classId || "").trim();
-    const materialIds = Array.isArray(req.body.materialIds) ? [...new Set(req.body.materialIds)] : [];
     const description = String(req.body.description || "").trim();
     const releaseAt = req.body.releaseAt ? new Date(req.body.releaseAt).toISOString() : null;
     const dueAt = req.body.dueAt ? new Date(req.body.dueAt).toISOString() : null;
-    if (!title || !classId || !materialIds.length) {
-      return res.status(400).json({ error: "配信名・クラス・教材を指定してください。" });
+    const targets = Array.isArray(req.body.targets) ? req.body.targets : [];
+    const explicitMaterialIds = Array.isArray(req.body.materialIds) ? req.body.materialIds : [];
+    const selectedFolderIds = Array.isArray(req.body.folderIds) ? req.body.folderIds : [];
+    if (!title || !targets.length || (!explicitMaterialIds.length && !selectedFolderIds.length)) {
+      return res.status(400).json({ error: "配信名・配信先・教材を指定してください。" });
     }
 
-    const classRow = await getRow("classes", classId);
-    const materials = await Promise.all(materialIds.map(id => getRow("materials", id)));
-    const scheduled = releaseAt && new Date(releaseAt).getTime() > Date.now();
-    const status = scheduled ? "scheduled" : "published";
-
-    const distribution = await createRow("distributions", {
-      title, classId, description, status, releaseAt, dueAt,
-      createdBy: req.authUser.$id
-    });
-
-    for (let index = 0; index < materials.length; index++) {
-      await createRow("distribution_items", {
-        distributionId: distribution.$id,
-        materialId: materials[index].$id,
-        orderNo: index + 1
-      });
-    }
-
-    const enrollments = await listRows("enrollments", [
-      Query.equal("classId", classId),
-      Query.equal("status", "active")
-    ], 100);
-
-    for (const enrollment of enrollments.rows) {
-      for (let index = 0; index < materials.length; index++) {
-        await createRow("assignments", {
-          distributionId: distribution.$id,
-          materialId: materials[index].$id,
-          classId: classRow.$id,
-          studentId: enrollment.studentId,
-          orderNo: index + 1,
-          status: scheduled || index > 0 ? "locked" : "available",
-          dueAt
-        });
+    const allFolders = (await listRows("folders", [], 500)).rows;
+    const allMaterials = (await listRows("materials", [], 500)).rows;
+    const folderSet = new Set(selectedFolderIds);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const folder of allFolders) {
+        if (folder.parentId && folderSet.has(folder.parentId) && !folderSet.has(folder.$id)) {
+          folderSet.add(folder.$id);
+          changed = true;
+        }
       }
     }
+    const materialIds = [...new Set([
+      ...explicitMaterialIds,
+      ...allMaterials.filter(item => item.folderId && folderSet.has(item.folderId)).map(item => item.$id)
+    ])];
+    if (!materialIds.length) return res.status(400).json({ error: "選択したフォルダに配信できる教材がありません。" });
 
-    res.status(201).json({ success: true, distribution, assignedStudents: enrollments.rows.length });
+    const materialMap = new Map(allMaterials.map(item => [item.$id, item]));
+    const materials = materialIds.map(id => materialMap.get(id)).filter(Boolean);
+    if (materials.length !== materialIds.length) {
+      return res.status(400).json({ error: "存在しない教材が選択されています。" });
+    }
+
+    const scheduled = releaseAt && new Date(releaseAt).getTime() > Date.now();
+    const status = scheduled ? "scheduled" : "published";
+    const results = [];
+    let assignedStudents = 0;
+
+    for (const target of targets) {
+      const classId = String(target.classId || "");
+      const classRow = await getRow("classes", classId);
+      const enrollments = await listRows("enrollments", [
+        Query.equal("classId", classId),
+        Query.equal("status", "active")
+      ], 500);
+      const mode = target.mode === "selected" ? "selected" : "all";
+      const requested = mode === "selected"
+        ? [...new Set(Array.isArray(target.studentIds) ? target.studentIds : [])]
+        : enrollments.rows.map(row => row.studentId);
+      if (mode === "selected" && !requested.length) {
+        return res.status(400).json({ error: classRow.name + " の配信対象生徒を選択してください。" });
+      }
+      const enrollmentMap = new Map(enrollments.rows.map(row => [row.studentId, row]));
+      const selectedEnrollments = requested.map(id => enrollmentMap.get(id)).filter(Boolean);
+      if (selectedEnrollments.length !== requested.length) {
+        return res.status(400).json({ error: classRow.name + " に在籍していない生徒が含まれています。" });
+      }
+      if (!selectedEnrollments.length) {
+        return res.status(400).json({ error: classRow.name + " に配信対象の生徒がいません。" });
+      }
+
+      const distribution = await createRow("distributions", {
+        title, classId, description, status, releaseAt, dueAt,
+        createdBy: req.authUser.$id
+      });
+      for (let index = 0; index < materials.length; index++) {
+        await createRow("distribution_items", {
+          distributionId: distribution.$id,
+          materialId: materials[index].$id,
+          orderNo: index + 1
+        });
+      }
+      for (const enrollment of selectedEnrollments) {
+        for (let index = 0; index < materials.length; index++) {
+          await createRow("assignments", {
+            distributionId: distribution.$id,
+            materialId: materials[index].$id,
+            classId: classRow.$id,
+            studentId: enrollment.studentId,
+            orderNo: index + 1,
+            status: scheduled || index > 0 ? "locked" : "available",
+            dueAt
+          });
+        }
+      }
+      assignedStudents += selectedEnrollments.length;
+      results.push({ distributionId: distribution.$id, classId, className: classRow.name, students: selectedEnrollments.length });
+    }
+
+    res.status(201).json({ success: true, distributions: results, assignedStudents, materialCount: materials.length });
   } catch (error) {
     console.error("Distribution failed:", error);
     res.status(500).json({ error: "教材を配信できませんでした。" });
