@@ -486,29 +486,36 @@ async function authenticate(req, res, next) {
       .setJWT(token);
     const account = new sdk.Account(userClient);
     const authUser = await account.get();
-    const profile=await getProfile(authUser);
-
-    if(!profile){
-      return res.status(403).json({
-        error: "このアカウントには利用権限がありません。管理者に登録を依頼してください。"
-      });
-    }
-    if(profile.status!=="active")return res.status(403).json({error:"このアカウントは停止されています。"});
-    const expectedSchoolSlug=normalizeSchoolSlug(req.headers["x-school-slug"]);
-    if(expectedSchoolSlug){
-      const expectedSchool=await findSchoolBySlug(expectedSchoolSlug);
-      if(!expectedSchool||expectedSchool.status!=="active"||expectedSchool.$id!==profile.schoolId){
-        return res.status(403).json({error:"このログインURLは、登録された所属学校と一致しません。学校専用URLをご確認ください。"});
+    const allowlist=String(process.env.PLATFORM_ADMIN_EMAILS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
+    const isPlatformAdmin=allowlist.includes(String(authUser.email||"").toLowerCase());
+    let profile;
+    if(isPlatformAdmin){
+      // Platform administrators are independent of any school's teacher/student roster.
+      profile={authUserId:authUser.$id,email:authUser.email,displayName:authUser.name||authUser.email,role:"platformAdmin",status:"active",schoolId:DEFAULT_SCHOOL_ID};
+    }else{
+      profile=await getProfile(authUser);
+      if(!profile){
+        return res.status(403).json({
+          error: "このアカウントには利用権限がありません。管理者に登録を依頼してください。"
+        });
       }
-    }
-    if(profile.schoolId){
-      const school=await getRow("schools",profile.schoolId).catch(()=>null);
-      if(!school||school.status!=="active")return res.status(403).json({error:"この学校のサービス利用は停止されています。"});
+      if(profile.status!=="active")return res.status(403).json({error:"このアカウントは停止されています。"});
+      const expectedSchoolSlug=normalizeSchoolSlug(req.headers["x-school-slug"]);
+      if(expectedSchoolSlug){
+        const expectedSchool=await findSchoolBySlug(expectedSchoolSlug);
+        if(!expectedSchool||expectedSchool.status!=="active"||expectedSchool.$id!==profile.schoolId){
+          return res.status(403).json({error:"このログインURLは、登録された所属学校と一致しません。学校専用URLをご確認ください。"});
+        }
+      }
+      if(profile.schoolId){
+        const school=await getRow("schools",profile.schoolId).catch(()=>null);
+        if(!school||school.status!=="active")return res.status(403).json({error:"この学校のサービス利用は停止されています。"});
+      }
+      if(!profile.schoolId)return res.status(403).json({error:"所属校舎が設定されていません。管理者にお問い合わせください。"});
     }
 
     req.authUser=authUser;
     req.profile=profile;
-    if(!profile.schoolId)return res.status(403).json({error:"所属校舎が設定されていません。管理者にお問い合わせください。"});
     res.on("finish",()=>{
       if(["GET","HEAD","OPTIONS"].includes(req.method))return;
       tenantContext.run(profile.schoolId,()=>{
@@ -712,8 +719,8 @@ app.post("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res
 });
 
 app.get("/api/me",authenticate,async(req,res)=>{
-  const allowlist=String(process.env.PLATFORM_ADMIN_EMAILS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
-  const school=await getRow("schools",req.profile.schoolId).catch(()=>null);
+  const platformAdmin=req.profile.role==="platformAdmin";
+  const school=platformAdmin?null:await getRow("schools",req.profile.schoolId).catch(()=>null);
   res.json({
     success:true,
     user:{
@@ -723,7 +730,7 @@ app.get("/api/me",authenticate,async(req,res)=>{
       role:req.profile.role,
       schoolName:school?.name||"",
       schoolSlug:school?.slug||"",
-      platformAdmin:allowlist.includes(String(req.authUser.email||"").toLowerCase())
+      platformAdmin
     }
   });
 });
