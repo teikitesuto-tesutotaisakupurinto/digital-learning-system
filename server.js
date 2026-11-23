@@ -408,6 +408,28 @@ async function getSystemSetting(key) {
   return result.rows[0] || null;
 }
 
+/* Maintenance gate for authenticated non-admin users */
+app.use("/api", async (req, res, next) => {
+  if (req.path === "/health" || req.path === "/system/status" || req.path.startsWith("/admin")) return next();
+  try {
+    const setting = await getSystemSetting("maintenance");
+    if (setting && setting.settingValue === "true") {
+      const header = req.headers.authorization || "";
+      const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+      if (token) {
+        const userClient = new sdk.Client().setEndpoint(ENDPOINT).setProject(PROJECT_ID).setJWT(token);
+        const authUser = await new sdk.Account(userClient).get();
+        const profile = await getProfile(authUser);
+        if (profile && profile.role === "admin") return next();
+      }
+      return res.status(503).json({ error: "現在システムメンテナンス中です。" });
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
 /* Health */
 app.get("/api/health", (req, res) => {
   res.json({
@@ -1027,28 +1049,6 @@ app.get("/api/system/status", async (req, res) => {
     res.json({ maintenance: setting ? setting.settingValue === "true" : false });
   } catch {
     res.json({ maintenance: false });
-  }
-});
-
-/* Maintenance gate for authenticated non-admin users */
-app.use("/api", async (req, res, next) => {
-  if (req.path === "/health" || req.path === "/system/status" || req.path.startsWith("/admin")) return next();
-  try {
-    const setting = await getSystemSetting("maintenance");
-    if (setting && setting.settingValue === "true") {
-      const header = req.headers.authorization || "";
-      const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-      if (token) {
-        const userClient = new sdk.Client().setEndpoint(ENDPOINT).setProject(PROJECT_ID).setJWT(token);
-        const authUser = await new sdk.Account(userClient).get();
-        const profile = await getProfile(authUser);
-        if (profile && profile.role === "admin") return next();
-      }
-      return res.status(503).json({ error: "現在システムメンテナンス中です。" });
-    }
-    next();
-  } catch (error) {
-    next(error);
   }
 });
 
