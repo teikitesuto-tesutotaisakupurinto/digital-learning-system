@@ -5,6 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const multer = require("multer");
 const sdk = require("node-appwrite");
+const { InputFile } = require("node-appwrite/file");
 
 const app = express();
 const PORT = Number(process.env.PORT || 10000);
@@ -638,7 +639,7 @@ app.post("/api/materials", authenticate, requireRole("teacher"), upload.fields([
     const stored = await storage.createFile({
       bucketId: BUCKET_ID,
       fileId: ID.unique(),
-      file: sdk.InputFile.fromBuffer(file.buffer, file.originalname),
+      file: InputFile.fromBuffer(file.buffer, file.originalname),
       permissions: []
     });
 
@@ -650,7 +651,7 @@ app.post("/api/materials", authenticate, requireRole("teacher"), upload.fields([
       storedAnswer = await storage.createFile({
         bucketId: BUCKET_ID,
         fileId: ID.unique(),
-        file: sdk.InputFile.fromBuffer(answerFile.buffer, answerFile.originalname),
+        file: InputFile.fromBuffer(answerFile.buffer, answerFile.originalname),
         permissions: []
       });
     }
