@@ -30,26 +30,121 @@ async function teacher(){
  }catch(e){notice(e.message)}
 }
 async function materials(){
- shell("教材ライブラリ",teacherLinks);const v=$("#view");
+ shell("教材ライブラリ",teacherLinks);
+ const v=$("#view");
  try{
   const [fr,mr]=await Promise.all([api("/api/folders"),api("/api/materials")]);
-  const folders=fr.folders,items=mr.materials,map=new Map(folders.map(x=>[x.$id,x]));let current=null;const selected=new Set();
+  const folders=fr.folders||[],items=mr.materials||[],map=new Map(folders.map(x=>[x.$id,x]));
+  let current=null,viewMode="list",sortMode="name",query="";
+  const selected=new Set();
+  const folderPath=id=>pathForFolder(id,map);
+  const descendants=id=>folderDescendants(id,folders);
+  const fileFolder=id=>{const f=map.get(id);return f?.parentId||null};
+  const openFolder=id=>{current=id;query="";render()};
+  const makeFolder=async parentId=>{
+   const name=prompt("新しいフォルダ名を入力してください。");
+   if(!name?.trim())return;
+   try{const r=await api("/api/folders",{method:"POST",body:JSON.stringify({name:name.trim(),parentId})});folders.push(r.folder);map.set(r.folder.$id,r.folder);notice("フォルダを作成しました。",true);render()}
+   catch(e){notice(e.message)}
+  };
+  const rename=async(type,id)=>{
+   const item=type==="folder"?map.get(id):items.find(x=>x.$id===id);
+   const value=prompt(type==="folder"?"フォルダ名を変更":"教材名を変更",type==="folder"?item.name:item.title);
+   if(!value?.trim())return;
+   try{
+    const r=await api((type==="folder"?"/api/folders/":"/api/materials/")+id,{method:"PATCH",body:JSON.stringify(type==="folder"?{name:value.trim()}:{title:value.trim()})});
+    Object.assign(item,type==="folder"?r.folder:r.material);notice("名前を変更しました。",true);render();
+   }catch(e){notice(e.message)}
+  };
+  const moveItems=async(keys,destination)=>{
+   for(const key of keys){
+    if(key.startsWith("f:")){
+     const id=key.slice(2);
+     if(destination&&descendants(id).has(destination))throw new Error("フォルダを自分自身または配下へ移動できません。");
+     const item=map.get(id),r=await api("/api/folders/"+id,{method:"PATCH",body:JSON.stringify({parentId:destination||null})});
+     Object.assign(item,r.folder);
+    }else{
+     const item=items.find(x=>x.$id===key.slice(2)),r=await api("/api/materials/"+item.$id,{method:"PATCH",body:JSON.stringify({folderId:destination||null})});
+     Object.assign(item,r.material);
+    }
+   }
+  };
+  const preview=async item=>{
+   const jwt=await token(),res=await fetch("/api/materials/"+item.$id+"/file",{headers:{Authorization:"Bearer "+jwt}});
+   if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.error||"PDFを開けませんでした。")}
+   const blob=await res.blob(),url=URL.createObjectURL(blob),dialog=$("#preview-dialog"),frame=$("#preview-frame");
+   frame.src=url;$("#preview-title").textContent=item.title;dialog.showModal();
+   dialog.addEventListener("close",()=>{frame.src="about:blank";URL.revokeObjectURL(url)},{once:true});
+  };
+  const allRows=()=>{
+   const isSearch=!!query.trim(),q=query.trim().toLocaleLowerCase();
+   let fs=isSearch?folders.filter(x=>String(x.name||"").toLocaleLowerCase().includes(q)):folders.filter(x=>(x.parentId||null)===(current||null));
+   let ms=isSearch?items.filter(x=>(String(x.title||"")+" "+String(x.fileName||"")).toLocaleLowerCase().includes(q)):items.filter(x=>(x.folderId||null)===(current||null));
+   const cmp=(a,b)=>sortMode==="newest"?String(b.$createdAt||"").localeCompare(String(a.$createdAt||"")):String(a.name||a.title||"").localeCompare(String(b.name||b.title||""),"ja");
+   fs.sort(cmp);ms.sort(cmp);return {fs,ms,isSearch};
+  };
   const render=()=>{
-   const here=folders.filter(x=>(x.parentId||null)===(current||null)),files=items.filter(x=>(x.folderId||null)===(current||null)),crumbs=pathForFolder(current,map);
-   v.innerHTML='<div class="library-toolbar"><div class="breadcrumbs"><a href="#" data-root>教材ライブラリ</a>'+crumbs.map(x=>' › <a href="#" data-crumb="'+x.$id+'">'+esc(x.name)+'</a>').join("")+'</div><div class="toolbar-actions"><button type="button" class="secondary" id="new-folder">新しいフォルダ</button><button type="button" class="secondary" id="upload-toggle">PDFを登録</button></div></div><section class="panel upload-panel hidden" id="upload-panel"><h2>教材PDFの登録</h2><form id="material-form"><div class="form-grid"><label class="field">教材名<input name="title" required></label><label class="field">保存先<input value="'+esc(crumbs.map(x=>x.name).join(" / ")||"教材ライブラリ")+'" disabled><input type="hidden" name="folderId" value="'+esc(current||"")+'"></label><label class="field">教材PDF<input name="file" type="file" accept="application/pdf" required></label><label class="field">解答・解説PDF（先生専用）<input name="answerFile" type="file" accept="application/pdf"></label></div><label class="field">説明<textarea name="description"></textarea></label><button class="primary">登録</button></form></section><div class="library-layout"><section class="panel file-panel"><div class="file-toolbar"><label><input type="checkbox" id="select-visible"> 表示中を選択</label><span id="selected-count">'+selected.size+'件選択</span><button type="button" class="text-action" id="clear-selection">選択解除</button></div><div class="file-list">'+here.map(x=>'<div class="file-row"><input type="checkbox" data-folder-select="'+x.$id+'" '+(selected.has("f:"+x.$id)?"checked":"")+'><span class="file-icon folder-icon">▰</span><a href="#" data-open="'+x.$id+'">'+esc(x.name)+'</a><span class="file-meta">フォルダ</span><button type="button" class="text-action" data-rename-folder="'+x.$id+'">名前変更</button></div>').join("")+files.map(x=>'<div class="file-row"><input type="checkbox" data-material-select="'+x.$id+'" '+(selected.has("m:"+x.$id)?"checked":"")+'><span class="file-icon pdf-icon">PDF</span><span class="file-name">'+esc(x.title)+'</span><span class="file-meta">'+esc(x.fileName||"PDF")+'</span><button type="button" class="text-action" data-rename-material="'+x.$id+'">名前変更</button></div>').join("")+(here.length+files.length?"":"<div class=\"empty-state\">このフォルダには項目がありません。</div>")+'</div><div class="selection-actions"><button type="button" class="secondary" id="bulk-move">選択項目を移動</button><button type="button" class="primary" id="bulk-distribute">選択教材を配信</button></div></section><aside class="panel folder-info"><h2>フォルダ管理</h2><p class="muted small">フォルダの中に何階層でもフォルダを作成できます。</p><button type="button" class="secondary" id="create-child">この場所にフォルダを作成</button></aside></div><dialog id="move-dialog" class="app-dialog"><form method="dialog"><h2>選択項目を移動</h2><label class="field">移動先<select id="move-destination"><option value="">教材ライブラリ（最上位）</option>'+folders.map(x=>'<option value="'+x.$id+'">'+esc(x.path||x.name)+'</option>').join("")+'</select></label><div class="dialog-actions"><button value="cancel" class="secondary">キャンセル</button><button id="move-confirm" value="default" class="primary">移動</button></div></form></dialog>';
-   v.querySelectorAll("[data-root]").forEach(a=>a.onclick=e=>{e.preventDefault();current=null;render()});v.querySelectorAll("[data-crumb]").forEach(a=>a.onclick=e=>{e.preventDefault();current=a.dataset.crumb;render()});v.querySelectorAll("[data-open]").forEach(a=>a.onclick=e=>{e.preventDefault();current=a.dataset.open;render()});
-   v.querySelectorAll("[data-folder-select]").forEach(el=>el.onchange=()=>{const k="f:"+el.dataset.folderSelect;el.checked?selected.add(k):selected.delete(k);$("#selected-count").textContent=selected.size+"件選択"});
-   v.querySelectorAll("[data-material-select]").forEach(el=>el.onchange=()=>{const k="m:"+el.dataset.materialSelect;el.checked?selected.add(k):selected.delete(k);$("#selected-count").textContent=selected.size+"件選択"});
-   $("#select-visible").onchange=e=>{for(const x of here)e.target.checked?selected.add("f:"+x.$id):selected.delete("f:"+x.$id);for(const x of files)e.target.checked?selected.add("m:"+x.$id):selected.delete("m:"+x.$id);render()};
-   $("#clear-selection").onclick=()=>{selected.clear();render()};
-   const makeFolder=async()=>{const name=prompt("フォルダ名を入力してください。");if(!name?.trim())return;try{const x=await api("/api/folders",{method:"POST",body:JSON.stringify({name:name.trim(),parentId:current})});folders.push(x.folder);map.set(x.folder.$id,x.folder);notice("フォルダを作成しました。",true);render()}catch(e){notice(e.message)}};
-   $("#new-folder").onclick=makeFolder;$("#create-child").onclick=makeFolder;$("#upload-toggle").onclick=()=>$("#upload-panel").classList.toggle("hidden");
-   $("#material-form").onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector("button");b.disabled=true;try{const x=await api("/api/materials",{method:"POST",body:new FormData(e.currentTarget)});items.push(x.material);notice("教材を登録しました。",true);render()}catch(err){notice(err.message);b.disabled=false}};
-   v.querySelectorAll("[data-rename-folder]").forEach(el=>el.onclick=async()=>{const f=map.get(el.dataset.renameFolder),name=prompt("新しいフォルダ名",f.name);if(!name?.trim())return;try{const x=await api("/api/folders/"+f.$id,{method:"PATCH",body:JSON.stringify({name:name.trim()})});Object.assign(f,x.folder);notice("フォルダ名を変更しました。",true);render()}catch(e){notice(e.message)}});
-   v.querySelectorAll("[data-rename-material]").forEach(el=>el.onclick=async()=>{const m=items.find(x=>x.$id===el.dataset.renameMaterial),title=prompt("新しい教材名",m.title);if(!title?.trim())return;try{const x=await api("/api/materials/"+m.$id,{method:"PATCH",body:JSON.stringify({title:title.trim()})});Object.assign(m,x.material);notice("教材名を変更しました。",true);render()}catch(e){notice(e.message)}});
-   $("#bulk-move").onclick=()=>{if(!selected.size){notice("移動する項目を選択してください。");return}$("#move-dialog").showModal()};
-   $("#move-confirm").onclick=async e=>{e.preventDefault();const destination=$("#move-destination").value||null;try{for(const key of selected){if(key.startsWith("f:")){const id=key.slice(2);if(destination&&folderDescendants(id,folders).has(destination))throw new Error("フォルダを自分自身の配下へ移動できません。");const old=map.get(id);const x=await api("/api/folders/"+id,{method:"PATCH",body:JSON.stringify({parentId:destination})});Object.assign(old,x.folder)}else{await api("/api/materials/"+key.slice(2),{method:"PATCH",body:JSON.stringify({folderId:destination})})}}notice("選択項目を移動しました。",true);$("#move-dialog").close();location.reload()}catch(e){notice(e.message)}};
-   $("#bulk-distribute").onclick=()=>{const materialIds=[...selected].filter(x=>x.startsWith("m:")).map(x=>x.slice(2)),folderIds=[...selected].filter(x=>x.startsWith("f:")).map(x=>x.slice(2));if(!materialIds.length&&!folderIds.length){notice("配信するフォルダまたは教材を選択してください。");return}sessionStorage.setItem("dls_distribution_selection",JSON.stringify({materialIds,folderIds}));location.href="/teacher/distribution.html"};
+   const {fs,ms,isSearch}=allRows(),crumbs=folderPath(current);
+   const selectionCount=selected.size;
+   const rows=fs.map(f=>{
+    const key="f:"+f.$id,active=selected.has(key);
+    return '<div class="drive-row folder-row" draggable="true" data-drag-type="folder" data-drag-id="'+f.$id+'" data-drop-folder="'+f.$id+'"><input aria-label="選択 '+esc(f.name)+'" type="checkbox" data-select="'+key+'" '+(active?"checked":"")+'><span class="drive-icon folder-symbol" aria-hidden="true">📁</span><button type="button" class="drive-name" data-open="'+f.$id+'">'+esc(f.name)+'</button><span class="drive-type">フォルダ</span><span class="drive-date">'+esc(f.$updatedAt?new Date(f.$updatedAt).toLocaleDateString("ja-JP"):"—")+'</span><div class="drive-actions"><button type="button" data-rename-folder="'+f.$id+'">名前変更</button><button type="button" data-move-single="'+key+'">移動</button></div></div>';
+   }).join("");
+   const fileRows=ms.map(m=>{
+    const key="m:"+m.$id,active=selected.has(key);
+    return '<div class="drive-row file-row-drive" draggable="true" data-drag-type="material" data-drag-id="'+m.$id+'"><input aria-label="選択 '+esc(m.title)+'" type="checkbox" data-select="'+key+'" '+(active?"checked":"")+'><span class="drive-icon pdf-symbol" aria-hidden="true">PDF</span><button type="button" class="drive-name" data-preview="'+m.$id+'">'+esc(m.title)+'</button><span class="drive-type">PDF ドキュメント</span><span class="drive-date">'+esc(m.$updatedAt?new Date(m.$updatedAt).toLocaleDateString("ja-JP"):"—")+'</span><div class="drive-actions"><button type="button" data-preview="'+m.$id+'">プレビュー</button><button type="button" data-rename-material="'+m.$id+'">名前変更</button><button type="button" data-move-single="'+key+'">移動</button></div></div>';
+   }).join("");
+   const gridRows=fs.map(f=>'<button type="button" class="drive-card" data-open="'+f.$id+'"><span class="drive-card-icon folder-symbol">📁</span><span>'+esc(f.name)+'</span><small>フォルダ</small></button>').join("")+ms.map(m=>'<button type="button" class="drive-card" data-preview="'+m.$id+'"><span class="drive-card-icon pdf-symbol">PDF</span><span>'+esc(m.title)+'</span><small>PDF ドキュメント</small></button>').join("");
+   v.innerHTML=
+    '<div class="drive-shell">'+
+     '<aside class="drive-rail"><button type="button" class="drive-new" id="drive-new">＋ 新規</button><button type="button" class="drive-rail-link active" id="drive-home">▣ マイドライブ</button><div class="drive-rail-note">教材ライブラリ</div><a class="drive-rail-link" href="/teacher/distribution.html">↗ 教材配信</a></aside>'+
+     '<section class="drive-main">'+
+      '<div class="drive-topline"><div class="drive-search"><span aria-hidden="true">⌕</span><input id="drive-search" type="search" placeholder="ドライブ内を検索" value="'+esc(query)+'"></div><button type="button" class="drive-upload" id="drive-upload">アップロード</button></div>'+
+      '<div class="drive-heading"><div><div class="breadcrumbs"><a href="#" data-root>マイドライブ</a>'+(!isSearch?crumbs.map(x=>' <span>›</span> <a href="#" data-crumb="'+x.$id+'">'+esc(x.name)+'</a>').join(""):"")+'</div><h2>'+(isSearch?"検索結果":(crumbs.length?esc(crumbs[crumbs.length-1].name):"マイドライブ"))+'</h2></div><div class="drive-view-tools"><label>並べ替え <select id="drive-sort"><option value="name" '+(sortMode==="name"?"selected":"")+'>名前</option><option value="newest" '+(sortMode==="newest"?"selected":"")+'>更新日時</option></select></label><button type="button" class="'+(viewMode==="list"?"active":"")+'" id="drive-list" aria-label="リスト表示">☷</button><button type="button" class="'+(viewMode==="grid"?"active":"")+'" id="drive-grid" aria-label="グリッド表示">▦</button></div></div>'+
+      '<div class="drive-selection '+(selectionCount?"shown":"")+'" id="drive-selection"><span>'+selectionCount+'件を選択中</span><button type="button" id="drive-clear">選択解除</button><button type="button" id="drive-move">移動</button><button type="button" id="drive-distribute">選択項目を配信</button></div>'+
+      '<div class="drive-content '+(viewMode==="grid"?"grid-mode":"list-mode")+'" id="drive-content">'+(viewMode==="grid"?'<div class="drive-grid">'+(gridRows||'<div class="drive-empty">この場所には項目がありません。</div>')+'</div>':'<div class="drive-list-head"><label><input type="checkbox" id="drive-select-all"> 名前</label><span>種類</span><span>更新日時</span><span>操作</span></div><div class="drive-list">'+(rows+fileRows||'<div class="drive-empty">この場所には項目がありません。</div>')+'</div>')+'</div>'+
+      '<div class="drive-drop-hint">フォルダをここへドラッグすると移動できます。</div>'+
+     '</section>'+
+    '</div>'+
+    '<section class="drive-upload-panel hidden" id="drive-upload-panel"><div class="panel"><div class="drive-panel-head"><h2>PDF教材をアップロード</h2><button type="button" id="drive-upload-close">閉じる</button></div><form id="material-form"><div class="form-grid"><label class="field">教材名<input name="title" required></label><label class="field">保存先<input value="'+esc(crumbs.map(x=>x.name).join(" / ")||"マイドライブ")+'" disabled><input type="hidden" name="folderId" value="'+esc(current||"")+'"></label><label class="field">教材PDF<input name="file" type="file" accept="application/pdf" required></label><label class="field">解答・解説PDF（先生専用）<input name="answerFile" type="file" accept="application/pdf"></label></div><label class="field">説明<textarea name="description"></textarea></label><div class="drive-form-actions"><button type="submit" class="primary">アップロードして保存</button></div></form></div></section>'+
+    '<dialog id="drive-new-dialog" class="app-dialog"><form method="dialog"><h2>新規作成</h2><button type="button" id="drive-create-folder" class="drive-dialog-action">新しいフォルダ</button><button type="button" id="drive-create-upload" class="drive-dialog-action">ファイルをアップロード</button><div class="dialog-actions"><button value="cancel" class="secondary">閉じる</button></div></form></dialog>'+
+    '<dialog id="drive-move-dialog" class="app-dialog"><form method="dialog"><h2>移動先を選択</h2><label class="field">フォルダ<select id="drive-destination"><option value="">マイドライブ（最上位）</option>'+folders.map(f=>'<option value="'+f.$id+'">'+esc(f.path||f.name)+'</option>').join("")+'</select></label><div class="dialog-actions"><button value="cancel" class="secondary">キャンセル</button><button type="button" id="drive-move-confirm" class="primary">ここに移動</button></div></form></dialog>'+
+    '<dialog id="preview-dialog" class="drive-preview-dialog"><div class="drive-preview-head"><strong id="preview-title">PDFプレビュー</strong><button type="button" id="preview-close">閉じる</button></div><iframe id="preview-frame" title="PDFプレビュー"></iframe></dialog>';
+   v.querySelectorAll("[data-root]").forEach(a=>a.onclick=e=>{e.preventDefault();current=null;query="";render()});
+   v.querySelectorAll("[data-crumb]").forEach(a=>a.onclick=e=>{e.preventDefault();openFolder(a.dataset.crumb)});
+   v.querySelectorAll("[data-open]").forEach(a=>a.onclick=()=>openFolder(a.dataset.open));
+   v.querySelectorAll("[data-preview]").forEach(a=>a.onclick=()=>{const m=items.find(x=>x.$id===a.dataset.preview);preview(m).catch(e=>notice(e.message))});
+   v.querySelectorAll("[data-select]").forEach(el=>el.onchange=()=>{el.checked?selected.add(el.dataset.select):selected.delete(el.dataset.select);renderSelection()});
+   v.querySelectorAll("[data-rename-folder]").forEach(el=>el.onclick=()=>rename("folder",el.dataset.renameFolder));
+   v.querySelectorAll("[data-rename-material]").forEach(el=>el.onclick=()=>rename("material",el.dataset.renameMaterial));
+   v.querySelectorAll("[data-move-single]").forEach(el=>el.onclick=()=>{selected.clear();selected.add(el.dataset.moveSingle);$("#drive-move-dialog").showModal()});
+   const renderSelection=()=>{const box=$("#drive-selection");box.classList.toggle("shown",selected.size>0);box.querySelector("span").textContent=selected.size+"件を選択中"};
+   const selectAll=$("#drive-select-all");
+   if(selectAll)selectAll.onchange=()=>{const {fs,ms}=allRows();for(const f of fs)selectAll.checked?selected.add("f:"+f.$id):selected.delete("f:"+f.$id);for(const m of ms)selectAll.checked?selected.add("m:"+m.$id):selected.delete("m:"+m.$id);render()};
+   $("#drive-clear").onclick=()=>{selected.clear();render()};
+   $("#drive-list").onclick=()=>{viewMode="list";render()};
+   $("#drive-grid").onclick=()=>{viewMode="grid";render()};
+   $("#drive-sort").onchange=e=>{sortMode=e.target.value;render()};
+   $("#drive-search").oninput=e=>{query=e.target.value;const pos=e.target.selectionStart;render();const input=$("#drive-search");input.focus();input.setSelectionRange(pos,pos)};
+   $("#drive-home").onclick=()=>{current=null;query="";render()};
+   $("#drive-new").onclick=()=>$("#drive-new-dialog").showModal();
+   $("#drive-create-folder").onclick=()=>{$("#drive-new-dialog").close();makeFolder(current)};
+   $("#drive-create-upload").onclick=()=>{$("#drive-new-dialog").close();$("#drive-upload-panel").classList.remove("hidden")};
+   $("#drive-upload").onclick=()=>$("#drive-upload-panel").classList.toggle("hidden");
+   $("#drive-upload-close").onclick=()=>$("#drive-upload-panel").classList.add("hidden");
+   $("#material-form").onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,button=form.querySelector('button[type="submit"]');button.disabled=true;try{const r=await api("/api/materials",{method:"POST",body:new FormData(form)});items.push(r.material);notice("PDF教材をアップロードしました。",true);render()}catch(err){notice(err.message);button.disabled=false}};
+   $("#drive-move").onclick=()=>{if(!selected.size)return;$("#drive-move-dialog").showModal()};
+   $("#drive-move-confirm").onclick=async()=>{const destination=$("#drive-destination").value||null;const button=$("#drive-move-confirm");button.disabled=true;try{await moveItems([...selected],destination);selected.clear();$("#drive-move-dialog").close();notice("選択した項目を移動しました。",true);render()}catch(e){notice(e.message)}finally{button.disabled=false}};
+   $("#drive-distribute").onclick=()=>{if(!selected.size){notice("配信する項目を選択してください。");return}const materialIds=[...selected].filter(x=>x.startsWith("m:")).map(x=>x.slice(2)),folderIds=[...selected].filter(x=>x.startsWith("f:")).map(x=>x.slice(2));sessionStorage.setItem("dls_distribution_selection",JSON.stringify({materialIds,folderIds}));location.href="/teacher/distribution.html"};
+   const newDialog=$("#drive-new-dialog");newDialog.addEventListener("click",e=>{if(e.target===newDialog)newDialog.close()});
+   $("#preview-close").onclick=()=>$("#preview-dialog").close();
+   const previewDialog=$("#preview-dialog");previewDialog.addEventListener("click",e=>{if(e.target===previewDialog)previewDialog.close()});
+   v.querySelectorAll("[data-drop-folder]").forEach(el=>{
+    el.ondragover=e=>{e.preventDefault();el.classList.add("drop-target")};
+    el.ondragleave=()=>el.classList.remove("drop-target");
+    el.ondrop=async e=>{e.preventDefault();el.classList.remove("drop-target");const key=e.dataTransfer.getData("text/plain");if(!key)return;try{await moveItems([key],el.dataset.dropFolder);notice("フォルダへ移動しました。",true);render()}catch(err){notice(err.message)}};
+   });
+   v.querySelectorAll("[draggable=true]").forEach(el=>el.ondragstart=e=>{const key=(el.dataset.dragType==="folder"?"f:":"m:")+el.dataset.dragId;e.dataTransfer.setData("text/plain",key);e.dataTransfer.effectAllowed="move"});
   };
   render();
  }catch(e){notice(e.message)}
@@ -95,7 +190,7 @@ async function student(){
  }catch(e){notice(e.message)}
 }
 function drawStrokes(ctx,items){for(const st of items||[]){if(!st.points?.length)continue;ctx.strokeStyle=st.color||"#2457c5";ctx.lineWidth=Number(st.width)||3;ctx.lineCap="round";ctx.lineJoin="round";ctx.beginPath();st.points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke()}}
-function eraseAt(strokes,point,radius){for(let i=strokes.length-1;i>=0;i--){const pts=strokes[i].points||[];if(pts.some(p=>Math.hypot(p.x-point.x,p.y-point.y)<=radius)){strokes.splice(i,1);return true}for(let j=1;j<pts.length;j++){const a=pts[j-1],b=pts[j],dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy,t=len?Math.max(0,Math.min(1,((point.x-a.x)*dx+(point.y-a.y)*dy)/len)):0;if(Math.hypot(point.x-(a.x+t*dx),point.y-(a.y+t*dy))<=radius){strokes.splice(i,1);return true}}}return false}
+function eraseAt(strokes,point,radius){let changed=false;for(let i=strokes.length-1;i>=0;i--){const pts=strokes[i].points||[];let hit=pts.some(p=>Math.hypot(p.x-point.x,p.y-point.y)<=radius);for(let j=1;!hit&&j<pts.length;j++){const a=pts[j-1],b=pts[j],dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy,t=len?Math.max(0,Math.min(1,((point.x-a.x)*dx+(point.y-a.y)*dy)/len)):0;hit=Math.hypot(point.x-(a.x+t*dx),point.y-(a.y+t*dy))<=radius}if(hit){strokes.splice(i,1);changed=true}}return changed}
 async function loadPdfEditor(stage,sourceUrl,submission,pages,role,locked){
  const jwt=await token(),resp=await fetch(sourceUrl,{headers:{Authorization:"Bearer "+jwt}});if(!resp.ok)throw new Error("PDF教材を読み込めません。");
  const pdfjs=await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs");pdfjs.GlobalWorkerOptions.workerSrc="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs";
@@ -103,7 +198,7 @@ async function loadPdfEditor(stage,sourceUrl,submission,pages,role,locked){
  const saved=new Map(pages.map(p=>[Number(p.pageNo),{student:JSON.parse(p.studentData||"[]"),teacher:JSON.parse(p.teacherData||"[]")}]));
  let pageNo=1,mode="pen",color=role==="teacher"?"#d13b32":"#1749bd",width=3,strokes=[],drawing=false,current=null,undoStack=[];
  const save=async()=>{if(role==="student"&&locked)return;const body={strokes};await api("/api/submissions/"+submission.$id+"/pages/"+pageNo,{method:"PUT",body:JSON.stringify(body)});const old=saved.get(pageNo)||{student:[],teacher:[]};saved.set(pageNo,role==="teacher"?{student:old.student,teacher:strokes}:{student:strokes,teacher:old.teacher});};
- const render=async()=>{const page=await pdf.getPage(pageNo),vp=page.getViewport({scale:1.25});stage.innerHTML="";const wrap=document.createElement("div");wrap.className="page-wrap";wrap.style.width=vp.width+"px";wrap.style.height=vp.height+"px";const base=document.createElement("canvas");base.width=vp.width;base.height=vp.height;const ink=document.createElement("canvas");ink.className="ink";ink.width=vp.width;ink.height=vp.height;wrap.append(base,ink);stage.append(wrap);const baseCtx=base.getContext("2d");if(!baseCtx)throw new Error("PDF表示用Canvasを作成できません。");await page.render({canvasContext:baseCtx,viewport:vp}).promise;const ctx=ink.getContext("2d"),entry=saved.get(pageNo)||{student:[],teacher:[]};strokes=role==="teacher"?entry.teacher:entry.student;const other=role==="teacher"?entry.student:entry.teacher;const paint=()=>{ctx.clearRect(0,0,ink.width,ink.height);drawStrokes(ctx,other);drawStrokes(ctx,strokes)};paint();const label=$("#page-label");if(label)label.textContent=pageNo+" / "+pdf.numPages;const pos=e=>{const r=ink.getBoundingClientRect();return{x:(e.clientX-r.left)*ink.width/r.width,y:(e.clientY-r.top)*ink.height/r.height}};ink.onpointerdown=e=>{if(locked&&role==="student")return;drawing=true;ink.setPointerCapture(e.pointerId);const p=pos(e);if(mode==="eraser"){undoStack.push(JSON.stringify(strokes));eraseAt(strokes,p,width*5);paint();return}undoStack.push(JSON.stringify(strokes));current={color,width,points:[p]};strokes.push(current);paint()};ink.onpointermove=e=>{if(!drawing)return;const p=pos(e);if(mode==="eraser"){if(eraseAt(strokes,p,width*5))paint();return}if(current){current.points.push(p);paint()}};ink.onpointerup=ink.onpointercancel=async()=>{if(!drawing)return;drawing=false;current=null;try{await save();const state=$("#save-state");if(state)state.textContent="保存済み"}catch(err){const state=$("#save-state");if(state)state.textContent=err.message}};};
+ const render=async()=>{const page=await pdf.getPage(pageNo),vp=page.getViewport({scale:1.25});stage.replaceChildren();stage.classList.add("pdf-stage-ready");const wrap=document.createElement("div");wrap.className="page-wrap";wrap.style.width=vp.width+"px";wrap.style.height=vp.height+"px";const base=document.createElement("canvas");base.className="pdf-base-canvas";base.setAttribute("aria-label","変更されないPDF教材の原本");base.width=vp.width;base.height=vp.height;const ink=document.createElement("canvas");ink.className="ink annotation-canvas";ink.setAttribute("aria-label","書き込みレイヤー");ink.width=vp.width;ink.height=vp.height;wrap.append(base,ink);stage.append(wrap);const baseCtx=base.getContext("2d");if(!baseCtx)throw new Error("PDF表示用Canvasを作成できません。");await page.render({canvasContext:baseCtx,viewport:vp}).promise;const ctx=ink.getContext("2d"),entry=saved.get(pageNo)||{student:[],teacher:[]};strokes=role==="teacher"?entry.teacher:entry.student;const other=role==="teacher"?entry.student:entry.teacher;const paint=()=>{ctx.clearRect(0,0,ink.width,ink.height);drawStrokes(ctx,other);drawStrokes(ctx,strokes)};paint();const label=$("#page-label");if(label)label.textContent=pageNo+" / "+pdf.numPages;const pos=e=>{const r=ink.getBoundingClientRect();return{x:(e.clientX-r.left)*ink.width/r.width,y:(e.clientY-r.top)*ink.height/r.height}};ink.onpointerdown=e=>{if(locked&&role==="student")return;drawing=true;ink.setPointerCapture(e.pointerId);const p=pos(e);if(mode==="eraser"){undoStack.push(JSON.stringify(strokes));eraseAt(strokes,p,width*5);paint();return}undoStack.push(JSON.stringify(strokes));current={color,width,points:[p]};strokes.push(current);paint()};ink.onpointermove=e=>{if(!drawing)return;const p=pos(e);if(mode==="eraser"){if(eraseAt(strokes,p,width*5))paint();return}if(current){current.points.push(p);paint()}};ink.onpointerup=ink.onpointercancel=async()=>{if(!drawing)return;drawing=false;current=null;try{await save();const state=$("#save-state");if(state)state.textContent="保存済み"}catch(err){const state=$("#save-state");if(state)state.textContent=err.message}};};
  const saveCurrent=save;await render();
  return {pdf,get pageNo(){return pageNo},setMode:m=>{mode=m},setColor:c=>{color=c},setWidth:w=>{width=w},async move(delta){const n=pageNo+delta;if(n<1||n>pdf.numPages)return;await saveCurrent();pageNo=n;await render()},async save(){await saveCurrent()},async undo(){if(!undoStack.length)return;strokes=JSON.parse(undoStack.pop());await saveCurrent();await render()}};
 }
