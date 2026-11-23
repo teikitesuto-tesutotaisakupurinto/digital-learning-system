@@ -614,7 +614,73 @@ app.post("/api/folders", authenticate, requireRole("teacher"), async (req, res) 
   }
 });
 
+app.patch("/api/folders/:id", authenticate, requireRole("teacher"), async (req, res) => {
+  try {
+    const folders = (await listRows("folders", [], 500)).rows;
+    const current = folders.find(x => x.$id === req.params.id);
+    if (!current) return res.status(404).json({ error: "フォルダが見つかりません。" });
+    const nextName = String(req.body.name ?? current.name).trim();
+    const nextParentId = req.body.parentId === undefined ? (current.parentId || null) : (String(req.body.parentId || "").trim() || null);
+    if (!nextName) return res.status(400).json({ error: "フォルダ名を入力してください。" });
+    const descendants = new Set([current.$id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const folder of folders) {
+        if (folder.parentId && descendants.has(folder.parentId) && !descendants.has(folder.$id)) {
+          descendants.add(folder.$id);
+          changed = true;
+        }
+      }
+    }
+    if (nextParentId && descendants.has(nextParentId)) {
+      return res.status(400).json({ error: "自分自身または配下のフォルダには移動できません。" });
+    }
+    const parent = nextParentId ? folders.find(x => x.$id === nextParentId) : null;
+    if (nextParentId && !parent) return res.status(404).json({ error: "移動先フォルダが見つかりません。" });
+    const nextPath = [parent ? (parent.path || parent.name) : "", nextName].filter(Boolean).join("/");
+    const updated = await updateRow("folders", current.$id, { name: nextName, parentId: nextParentId, path: nextPath });
+    const byId = new Map(folders.map(x => [x.$id, x]));
+    byId.set(current.$id, updated);
+    const refresh = async folderId => {
+      const parentFolder = byId.get(folderId);
+      for (const child of folders.filter(x => x.parentId === folderId)) {
+        const childPath = [parentFolder.path, child.name].filter(Boolean).join("/");
+        const childUpdated = await updateRow("folders", child.$id, { path: childPath });
+        byId.set(child.$id, childUpdated);
+        await refresh(child.$id);
+      }
+    };
+    await refresh(current.$id);
+    res.json({ success: true, folder: updated });
+  } catch (error) {
+    console.error("Folder update failed:", error);
+    res.status(500).json({ error: "フォルダを更新できませんでした。" });
+  }
+});
+
 /* PDF material library */
+app.patch("/api/materials/:id", authenticate, requireRole("teacher"), async (req, res) => {
+  try {
+    const material = await getRow("materials", req.params.id);
+    const data = {};
+    if (req.body.title !== undefined) {
+      const title = String(req.body.title || "").trim();
+      if (!title) return res.status(400).json({ error: "教材名を入力してください。" });
+      data.title = title;
+    }
+    if (req.body.folderId !== undefined) {
+      const folderId = String(req.body.folderId || "").trim() || null;
+      if (folderId) await getRow("folders", folderId);
+      data.folderId = folderId;
+    }
+    const updated = await updateRow("materials", material.$id, data);
+    res.json({ success: true, material: updated });
+  } catch (error) {
+    res.status(500).json({ error: "教材を更新できませんでした。" });
+  }
+});
+
 app.get("/api/materials", authenticate, requireRole("teacher"), async (req, res) => {
   const result = await listRows("materials", [], 100);
   res.json({ success: true, materials: result.rows });
