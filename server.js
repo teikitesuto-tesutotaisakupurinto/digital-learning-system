@@ -473,8 +473,8 @@ app.post("/api/users", authenticate, requireRole("teacher"), async (req, res) =>
     if (!["student"].includes(role)) {
       return res.status(400).json({ error: "指定された権限は使用できません。" });
     }
-    if (role !== "student") {
-      return res.status(403).json({ error: "先生は生徒アカウントのみ作成できます。" });
+    if (!["teacher", "student"].includes(role)) {
+      return res.status(400).json({ error: "権限は先生または生徒を選択してください。" });
     }
 
     const authUser = await users.create({
