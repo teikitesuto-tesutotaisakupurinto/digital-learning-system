@@ -280,24 +280,40 @@ function updateRow(tableId, rowId, data) {
   });
 }
 
+// The first authenticated account is promoted to the initial administrator.
+// This runs only while the application users table is completely empty.
+let bootstrapAdminPromise = null;
+
 async function getProfile(authUser) {
   const found = await listRows("users", [Query.equal("authUserId", authUser.$id)], 1);
   if (found.rows.length) return found.rows[0];
 
-  const bootstrapEmail = String(process.env.BOOTSTRAP_ADMIN_EMAIL || "").trim().toLowerCase();
-  if (bootstrapEmail && String(authUser.email || "").toLowerCase() === bootstrapEmail) {
-    const admins = await listRows("users", [Query.equal("role", "admin")], 1);
-    if (admins.rows.length) return null;
+  if (!bootstrapAdminPromise) {
+    bootstrapAdminPromise = (async () => {
+      const existingProfiles = await listRows("users", [], 1);
+      if (existingProfiles.rows.length) return null;
 
-    return createRow("users", {
-      authUserId: authUser.$id,
-      email: authUser.email,
-      displayName: authUser.name || authUser.email,
-      role: "admin",
-      status: "active"
+      return createRow("users", {
+        authUserId: authUser.$id,
+        email: authUser.email,
+        displayName: authUser.name || authUser.email,
+        role: "admin",
+        status: "active"
+      });
+    })().finally(() => {
+      bootstrapAdminPromise = null;
     });
   }
-  return null;
+
+  const createdProfile = await bootstrapAdminPromise;
+  if (createdProfile && createdProfile.authUserId === authUser.$id) {
+    console.log("Initial administrator created for: " + authUser.email);
+    return createdProfile;
+  }
+
+  // Another request may have completed the one-time bootstrap first.
+  const afterBootstrap = await listRows("users", [Query.equal("authUserId", authUser.$id)], 1);
+  return afterBootstrap.rows[0] || null;
 }
 
 async function authenticate(req, res, next) {
