@@ -464,8 +464,8 @@ function requireRole(...roles) {
     next();
   };
 }
-// Current single-organization boundary: each teacher owns their own classes and resources.
-// Separate school tenants and shared staff access require a schoolId-based migration before multi-school sales.
+// Tenant authorization is enforced centrally by AsyncLocalStorage-backed schoolId scoping.
+ // Teachers within one school can collaborate; records from other schools are invisible.
 async function teacherOwnsClass(req,classId) {
   if(req.profile.role!=="teacher")return false;
   return Boolean(await getRow("classes",classId).catch(()=>null));
@@ -807,7 +807,7 @@ app.post("/api/folders", authenticate, requireRole("teacher"), async (req, res) 
   if (!name) return res.status(400).json({ error: "フォルダー名を入力してください。" });
   try {
     const parent=parentId?await getRow("folders",parentId):null;
-    if(parent && parent.createdBy!==req.authUser.$id) return res.status(404).json({error:"親フォルダが見つかりません。"});
+    if(parentId&&!parent)return res.status(404).json({error:"親フォルダが見つかりません。"});
     const folder = await createRow("folders", {
       name,
       parentId,
@@ -904,7 +904,7 @@ app.patch("/api/materials/:id", authenticate, requireRole("teacher"), async (req
     }
     if (req.body.folderId !== undefined) {
       const folderId = String(req.body.folderId || "").trim() || null;
-      if(folderId){const folder=await getRow("folders",folderId);if(folder.createdBy!==req.authUser.$id)return res.status(404).json({error:"移動先フォルダが見つかりません。"});}
+      if(folderId)await getRow("folders",folderId);
       data.folderId = folderId;
     }
     if (req.body.isStarred !== undefined) data.isStarred = Boolean(req.body.isStarred);
@@ -937,7 +937,7 @@ app.post("/api/materials", authenticate, requireRole("teacher"), upload.fields([
 
     if(!file||!title)return res.status(400).json({error:"教材名とPDFファイルを指定してください。"});
     if(title.length>255||description.length>5000)return res.status(400).json({error:"教材名は255文字以内、説明は5000文字以内で入力してください。"});
-    if(folderId){const folder=await getRow("folders",folderId);if(folder.createdBy!==req.authUser.$id)return res.status(404).json({error:"保存先フォルダが見つかりません。"});}
+    if(folderId)await getRow("folders",folderId);
     if(answerFile&&(answerFile.mimetype!=="application/pdf"||answerFile.buffer.subarray(0,5).toString()!=="%PDF-"))return res.status(400).json({error:"解答ファイルもPDFを指定してください。"});
     if (file.mimetype !== "application/pdf" || file.buffer.subarray(0, 5).toString() !== "%PDF-") {
       return res.status(400).json({ error: "PDFファイルのみ登録できます。" });
