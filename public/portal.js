@@ -23,11 +23,12 @@ try{
   <div class="stat"><span>生徒</span><strong>${u.users.length}</strong></div>
  </div>
  <section class="panel"><h2>クラスを作成</h2><form id="class-form" class="row"><input name="name" placeholder="クラス名" required><input name="description" placeholder="説明（任意）"><button class="primary">作成</button></form></section>
- <section class="panel"><h2>生徒アカウントを作成</h2><form id="student-form" class="form-grid">
+ <section class="panel"><h2>アカウントを作成</h2><form id="student-form" class="form-grid">
   <label class="field">氏名<input name="name" required></label>
   <label class="field">メールアドレス<input name="email" type="email" required></label>
   <label class="field">初期パスワード<input name="password" type="password" minlength="8" required></label>
-  <div><button class="primary">生徒を登録</button></div>
+  <label class="field">権限<select name="role"><option value="student">生徒</option><option value="teacher">先生</option></select></label>
+  <div><button class="primary">アカウントを登録</button></div>
  </form><p class="muted small">登録した生徒は、下のクラス管理から所属クラスに追加できます。</p></section>
  <section class="panel"><h2>クラス・生徒管理</h2><label class="field">クラス<select id="enroll-class">${c.classes.map(x=>`<option value="${esc(x.$id)}">${esc(x.name)}</option>`).join("")}</select></label>
  <div class="row"><select id="enroll-student">${u.users.map(x=>`<option value="${esc(x.authUserId)}">${esc(x.displayName)}（${esc(x.email)}）</option>`).join("")}</select><button id="enroll-button" class="primary">このクラスに追加</button></div>
@@ -35,7 +36,7 @@ try{
  <section class="panel"><h2>最近の教材</h2><div class="list">${m.materials.slice(0,6).map(x=>`<div class="list-item"><div><strong>${esc(x.title)}</strong><span class="muted small">${esc(x.fileName||"PDF")}</span></div><span class="badge">登録済み</span></div>`).join("")||"教材はまだ登録されていません。"}</div><p><a href="/teacher/materials.html">教材管理を開く</a></p></section>
  <section class="panel"><h2>最近の配信</h2><div class="list">${d.distributions.slice(0,6).map(x=>`<div class="list-item"><div><strong>${esc(x.title)}</strong><span class="muted small">${esc(x.status)}</span></div></div>`).join("")||"配信履歴はありません。"}</div></section>`;
  $("#class-form").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{await api("/api/classes",{method:"POST",body:JSON.stringify(Object.fromEntries(f))});notice("クラスを作成しました。",true);teacher()}catch(err){notice(err.message)}};
- $("#student-form").onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector("button");b.disabled=true;try{const f=new FormData(e.currentTarget);await api("/api/users",{method:"POST",body:JSON.stringify(Object.fromEntries(f))});notice("生徒アカウントを作成しました。",true);teacher()}catch(err){notice(err.message);b.disabled=false}};
+ $("#student-form").onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector("button");b.disabled=true;try{const f=new FormData(e.currentTarget);await api("/api/users",{method:"POST",body:JSON.stringify(Object.fromEntries(f))});notice("アカウントを作成しました。",true);teacher()}catch(err){notice(err.message);b.disabled=false}};
  async function loadClassStudents(){const id=$("#enroll-class").value;if(!id){$("#class-students").textContent="先にクラスを作成してください。";return}const x=await api("/api/classes/"+id+"/students");$("#class-students").innerHTML=x.students.map(st=>`<div class="list-item"><strong>${esc(st.studentName||st.studentId)}</strong><span class="badge">在籍中</span></div>`).join("")||"このクラスに登録された生徒はいません。"}
  $("#enroll-class").onchange=loadClassStudents;
  $("#enroll-button").onclick=async()=>{const classId=$("#enroll-class").value,studentId=$("#enroll-student").value;if(!classId||!studentId){notice("クラスと生徒を選択してください。");return}try{await api("/api/classes/"+classId+"/students",{method:"POST",body:JSON.stringify({studentId})});notice("生徒をクラスに追加しました。",true);loadClassStudents()}catch(err){notice(err.message)}};
