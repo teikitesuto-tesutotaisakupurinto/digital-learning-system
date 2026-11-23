@@ -1244,32 +1244,68 @@ app.get("/api/teacher/live/:assignmentId", authenticate, requireRole("teacher"),
 
 app.get("/api/classes/:id/progress", authenticate, requireRole("teacher"), async (req, res) => {
   try {
-    const enrollments = await listRows("enrollments", [
-      Query.equal("classId", req.params.id),
-      Query.equal("status", "active")
-    ], 100);
-    const assignments = await listRows("assignments", [
-      Query.equal("classId", req.params.id)
-    ], 1000);
+    const [enrollmentResult, assignmentResult] = await Promise.all([
+      listRows("enrollments", [
+        Query.equal("classId", req.params.id),
+        Query.equal("status", "active")
+      ], 100),
+      listRows("assignments", [
+        Query.equal("classId", req.params.id)
+      ], 1000)
+    ]);
 
-    const students = await Promise.all(enrollments.rows.map(async enrollment => {
-      const studentAssignments = assignments.rows.filter(a => a.studentId === enrollment.studentId);
-      const results = await Promise.all(studentAssignments.map(async assignment => {
-        const submission = await findLatestSubmission(assignment.$id, assignment.studentId);
-        const material = await getRow("materials", assignment.materialId).catch(() => null);
-        const sessions = await listRows("study_sessions", [
-          Query.equal("assignmentId", assignment.$id),
-          Query.equal("studentId", assignment.studentId)
-        ], 1000).catch(() => ({ rows: [] }));
-        const studySeconds = sessions.rows.reduce((sum, session) =>
-          sum + Math.max(0, Number(session.durationSeconds) || 0), 0);
-        return { ...assignment, materialTitle: material?.title || "教材", submission, studySeconds };
-      }));
-      return {
-        studentId: enrollment.studentId,
-        studentName: enrollment.studentName,
-        assignments: results
-      };
+    const enrollments = enrollmentResult.rows;
+    const assignments = assignmentResult.rows;
+    const assignmentIds = [...new Set(assignments.map(row => row.$id))];
+    const materialIds = [...new Set(assignments.map(row => row.materialId).filter(Boolean))];
+
+    // Avoid one database request per student/material/session. Fetch related data in batches.
+    const fetchByIds = async (tableId, field, ids, order = []) => {
+      if (!ids.length) return [];
+      const chunks = [];
+      for (let i = 0; i < ids.length; i += 80) chunks.push(ids.slice(i, i + 80));
+      const results = await Promise.all(chunks.map(chunk =>
+        listRows(tableId, [Query.equal(field, chunk), ...order], 1000)
+      ));
+      return results.flatMap(result => result.rows || []);
+    };
+
+    const [submissions, sessions, materials] = await Promise.all([
+      fetchByIds("submissions", "assignmentId", assignmentIds, [Query.orderDesc("$createdAt")]),
+      fetchByIds("study_sessions", "assignmentId", assignmentIds),
+      fetchByIds("materials", "$id", materialIds)
+    ]);
+
+    const latestSubmissionByAssignment = new Map();
+    for (const submission of submissions) {
+      const key = submission.assignmentId + ":" + submission.studentId;
+      if (!latestSubmissionByAssignment.has(key)) latestSubmissionByAssignment.set(key, submission);
+    }
+    const studySecondsByAssignment = new Map();
+    for (const session of sessions) {
+      const key = session.assignmentId + ":" + session.studentId;
+      studySecondsByAssignment.set(key,
+        (studySecondsByAssignment.get(key) || 0) + Math.max(0, Number(session.durationSeconds) || 0));
+    }
+    const materialById = new Map(materials.map(material => [material.$id, material]));
+    const assignmentsByStudent = new Map();
+    for (const assignment of assignments) {
+      if (!assignmentsByStudent.has(assignment.studentId)) assignmentsByStudent.set(assignment.studentId, []);
+      assignmentsByStudent.get(assignment.studentId).push(assignment);
+    }
+
+    const students = enrollments.map(enrollment => ({
+      studentId: enrollment.studentId,
+      studentName: enrollment.studentName,
+      assignments: (assignmentsByStudent.get(enrollment.studentId) || []).map(assignment => {
+        const key = assignment.$id + ":" + assignment.studentId;
+        return {
+          ...assignment,
+          materialTitle: materialById.get(assignment.materialId)?.title || "教材",
+          submission: latestSubmissionByAssignment.get(key) || null,
+          studySeconds: studySecondsByAssignment.get(key) || 0
+        };
+      })
     }));
 
     res.json({ success: true, students });
