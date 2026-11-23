@@ -1434,7 +1434,7 @@ function beginEventStream(req, res, key) {
   });
   res.flushHeaders?.();
   res.write("event: connected\ndata: {}\n\n");
-  const heartbeat=setInterval(()=>{if(!res.writableEnded)res.write(": keep-alive\\n\\n");},15000);
+  const heartbeat=setInterval(()=>{if(!res.writableEnded)res.write(": keep-alive\n\n");},15000);
   res.on("close",()=>clearInterval(heartbeat));
   addLiveClient(key,res);
 }
