@@ -3,6 +3,19 @@ const client=new Client().setEndpoint("https://sgp.cloud.appwrite.io/v1").setPro
 const account=new Account(client);
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function eraseAt(strokes,point,radius){
+ const near=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y)<=radius;
+ for(let i=strokes.length-1;i>=0;i--){
+  const pts=strokes[i].points||[];
+  if(pts.some(p=>near(p,point))){strokes.splice(i,1);return true}
+  for(let j=1;j<pts.length;j++){
+   const a=pts[j-1],b=pts[j],dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy;
+   const t=len?Math.max(0,Math.min(1,((point.x-a.x)*dx+(point.y-a.y)*dy)/len)):0;
+   if(Math.hypot(point.x-(a.x+t*dx),point.y-(a.y+t*dy))<=radius){strokes.splice(i,1);return true}
+  }
+ }
+ return false
+}
 async function token(){const t=await account.createJWT();sessionStorage.setItem("dls_jwt",t.jwt);return t.jwt}
 async function api(url,options={}){const jwt=await token();const headers={Authorization:"Bearer "+jwt,...(options.headers||{})};if(options.body&&!(options.body instanceof FormData))headers["Content-Type"]="application/json";const r=await fetch(url,{...options,headers});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||"処理に失敗しました。");return data}
 function notice(msg,ok=false){const el=$("#notice");if(el){el.textContent=msg;el.className="message "+(ok?"success":"error")}}
@@ -128,9 +141,9 @@ async function grading(){
    $("#teacher-page").textContent=pageNo+" / "+pdf.numPages;
    let drawing=false,current=null;
    const pos=e=>{const r=ink.getBoundingClientRect();return{x:(e.clientX-r.left)*ink.width/r.width,y:(e.clientY-r.top)*ink.height/r.height}};
-   ink.onpointerdown=e=>{drawing=true;ink.setPointerCapture(e.pointerId);current={color:mode==="eraser"?"#ffffff":$("#teacher-color").value,width:Number($("#teacher-width").value)*(mode==="eraser"?6:1),points:[pos(e)]};teacherStrokes.push(current);paint()};
-   ink.onpointermove=e=>{if(!drawing||!current)return;current.points.push(pos(e));paint()};
-   ink.onpointerup=ink.onpointercancel=()=>{drawing=false;current=null};
+   ink.onpointerdown=e=>{drawing=true;ink.setPointerCapture(e.pointerId);const p=pos(e);if(mode==="eraser"){eraseAt(teacherStrokes,p,Number($("#teacher-width").value)*5);paint();return}current={color:$("#teacher-color").value,width:Number($("#teacher-width").value),points:[p]};teacherStrokes.push(current);paint()};
+   ink.onpointermove=e=>{if(!drawing)return;const p=pos(e);if(mode==="eraser"){if(eraseAt(teacherStrokes,p,Number($("#teacher-width").value)*5))paint();return}if(!current)return;current.points.push(p);paint()};
+   ink.onpointerup=ink.onpointercancel=()=>{if(drawing){drawing=false;current=null;saveTeacher().catch(err=>notice(err.message))}};
    function paint(){ctx.clearRect(0,0,ink.width,ink.height);drawStrokes(ctx,entry.student);drawStrokes(ctx,teacherStrokes)}
   }
   const saveTeacher=async()=>{const old=saved.get(pageNo)||{student:[],teacher:[]};await api("/api/submissions/"+d.submission.$id+"/pages/"+pageNo,{method:"PUT",body:JSON.stringify({strokes:teacherStrokes})});saved.set(pageNo,{student:old.student,teacher:teacherStrokes});notice("このページの添削を保存しました。",true)};
@@ -171,8 +184,8 @@ async function workspace(){
    paint();$("#page-label").textContent=pageNo+" / "+pdf.numPages;
    let drawing=false,current=null;
    const pos=e=>{const r=ink.getBoundingClientRect();return{x:(e.clientX-r.left)*ink.width/r.width,y:(e.clientY-r.top)*ink.height/r.height}};
-   ink.onpointerdown=e=>{if(locked)return;drawing=true;ink.setPointerCapture(e.pointerId);current={color:mode==="eraser"?"#ffffff":$("#color").value,width:Number($("#width").value)*(mode==="eraser"?6:1),points:[pos(e)]};strokes.push(current);paint()};
-   ink.onpointermove=e=>{if(!drawing||!current)return;current.points.push(pos(e));paint()};
+   ink.onpointerdown=e=>{if(locked)return;drawing=true;ink.setPointerCapture(e.pointerId);const p=pos(e);if(mode==="eraser"){eraseAt(strokes,p,Number($("#width").value)*5);paint();return}current={color:$("#color").value,width:Number($("#width").value),points:[p]};strokes.push(current);paint()};
+   ink.onpointermove=e=>{if(!drawing)return;const p=pos(e);if(mode==="eraser"){if(eraseAt(strokes,p,Number($("#width").value)*5))paint();return}if(!current)return;current.points.push(p);paint()};
    ink.onpointerup=ink.onpointercancel=()=>{if(drawing){drawing=false;current=null;save()}};
   };
   $("#pen").onclick=()=>mode="pen";$("#eraser").onclick=()=>mode="eraser";
