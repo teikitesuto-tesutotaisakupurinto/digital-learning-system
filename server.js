@@ -496,6 +496,16 @@ async function findLatestSubmission(assignmentId, studentId) {
   return result.rows[0] || null;
 }
 
+async function fetchRowsByIds(tableId,field,ids,extraQueries=[],order=[],limit=1000) {
+  if(!ids.length)return [];
+  const chunks=[];
+  for(let i=0;i<ids.length;i+=40)chunks.push(ids.slice(i,i+40));
+  const pages=await Promise.all(chunks.map(chunk=>listRows(tableId,[
+    Query.equal(field,chunk),...extraQueries,...order
+  ],limit)));
+  return pages.flatMap(page=>page.rows||[]);
+}
+
 async function ensureSubmission(assignment) {
   let submission = await findLatestSubmission(assignment.$id, assignment.studentId);
   if (!submission) {
@@ -1121,36 +1131,43 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
   }
 });
 
-app.get("/api/assignments", authenticate, async (req, res) => {
-  try {
-    if (req.profile.role === "student") {
+app.get("/api/assignments",authenticate,async(req,res)=>{
+  try{
+    if(req.profile.role==="student"){
       await refreshScheduledAssignments(req.authUser.$id);
-      const result = await listRows("assignments", [
-        Query.equal("studentId", req.authUser.$id)
-      ], 100);
-      const assignments = await Promise.all(result.rows.map(async item => {
-        const material = await getRow("materials", item.materialId).catch(() => null);
-        const distribution = await getRow("distributions", item.distributionId).catch(() => null);
-        const sessions = await listRows("study_sessions", [
-          Query.equal("assignmentId", item.$id),
-          Query.equal("studentId", req.authUser.$id)
-        ], 1000).catch(() => ({ rows: [] }));
-        const studySeconds = sessions.rows.reduce((sum, session) =>
-          sum + Math.max(0, Number(session.durationSeconds) || 0), 0);
-        const submission = await findLatestSubmission(item.$id, req.authUser.$id);
-        const grades = submission ? await listRows("grading_records", [
-          Query.equal("submissionId", submission.$id),
-          Query.orderDesc("$createdAt")
-        ], 1).catch(() => ({ rows: [] })) : { rows: [] };
-        return { ...item, material, distribution, studySeconds, latestGrade: grades.rows[0] || null };
-      }));
-      return res.json({ success: true, assignments });
+      const result=await listRows("assignments",[Query.equal("studentId",req.authUser.$id),Query.orderDesc("$createdAt")],500);
+      const rows=result.rows;
+      const assignmentIds=rows.map(item=>item.$id);
+      const materialIds=[...new Set(rows.map(item=>item.materialId).filter(Boolean))];
+      const distributionIds=[...new Set(rows.map(item=>item.distributionId).filter(Boolean))];
+      const [materials,distributions,sessions,submissions]=await Promise.all([
+        fetchRowsByIds("materials","$id",materialIds),
+        fetchRowsByIds("distributions","$id",distributionIds),
+        fetchRowsByIds("study_sessions","assignmentId",assignmentIds,[Query.equal("studentId",req.authUser.$id)]),
+        fetchRowsByIds("submissions","assignmentId",assignmentIds,[Query.equal("studentId",req.authUser.$id)],[Query.orderDesc("$createdAt")])
+      ]);
+      const materialById=new Map(materials.map(row=>[row.$id,row]));
+      const distributionById=new Map(distributions.map(row=>[row.$id,row]));
+      const submissionByAssignment=new Map();
+      for(const row of submissions)if(!submissionByAssignment.has(row.assignmentId))submissionByAssignment.set(row.assignmentId,row);
+      const secondsByAssignment=new Map();
+      for(const session of sessions)secondsByAssignment.set(session.assignmentId,(secondsByAssignment.get(session.assignmentId)||0)+Math.max(0,Number(session.durationSeconds)||0));
+      const submissionIds=[...new Set(submissions.map(row=>row.$id))];
+      const grades=await fetchRowsByIds("grading_records","submissionId",submissionIds,[],[Query.orderDesc("$createdAt")]);
+      const gradeBySubmission=new Map();
+      for(const grade of grades)if(!gradeBySubmission.has(grade.submissionId))gradeBySubmission.set(grade.submissionId,grade);
+      const assignments=rows.map(item=>{
+        const submission=submissionByAssignment.get(item.$id)||null;
+        return {...item,material:materialById.get(item.materialId)||null,distribution:distributionById.get(item.distributionId)||null,studySeconds:secondsByAssignment.get(item.$id)||0,latestGrade:submission?gradeBySubmission.get(submission.$id)||null:null};
+      });
+      return res.json({success:true,assignments});
     }
     const classes=await listRows("classes",[],500);
     const grouped=await Promise.all(classes.rows.map(row=>listRows("assignments",[Query.equal("classId",row.$id)],1000)));
     res.json({success:true,assignments:grouped.flatMap(item=>item.rows)});
-  } catch (error) {
-    res.status(500).json({ error: "課題一覧を取得できませんでした。" });
+  }catch(error){
+    console.error("Assignment list failed:",error);
+    res.status(500).json({error:"課題一覧を取得できませんでした。"});
   }
 });
 
