@@ -280,14 +280,18 @@ function updateRow(tableId, rowId, data) {
   });
 }
 
-// The first authenticated account is promoted to the initial administrator.
+// The first authenticated account is registered as the initial teacher.
 // This runs only while the application users table is completely empty.
 // One-time first-account bootstrap: the first registered application user becomes a teacher.
 let bootstrapTeacherPromise = null;
 
 async function getProfile(authUser) {
   const found = await listRows("users", [Query.equal("authUserId", authUser.$id)], 1);
-  if (found.rows.length) return found.rows[0];
+  if (found.rows.length) {
+    const profile = found.rows[0];
+    if (profile.role === "admin") return updateRow("users", profile.$id, { role: "teacher" });
+    return profile;
+  }
 
   if (!bootstrapTeacherPromise) {
     bootstrapTeacherPromise = (async () => {
