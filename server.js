@@ -460,7 +460,7 @@ app.get("/api/users", authenticate, requireRole("teacher"), async (req, res) => 
   }
 });
 
-app.post("/api/users", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.post("/api/users", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const email = String(req.body.email || "").trim().toLowerCase();
     const name = String(req.body.name || "").trim();
@@ -532,7 +532,7 @@ app.get("/api/classes", authenticate, async (req, res) => {
   }
 });
 
-app.post("/api/classes", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.post("/api/classes", authenticate, requireRole("teacher"), async (req, res) => {
   const name = String(req.body.name || "").trim();
   const description = String(req.body.description || "").trim();
   if (!name) return res.status(400).json({ error: "クラス名を入力してください。" });
@@ -551,7 +551,7 @@ app.post("/api/classes", authenticate, requireRole("teacher", "teacher"), async 
   }
 });
 
-app.get("/api/classes/:id/students", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.get("/api/classes/:id/students", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const rows = await listRows("enrollments", [
       Query.equal("classId", req.params.id),
@@ -563,7 +563,7 @@ app.get("/api/classes/:id/students", authenticate, requireRole("teacher", "teach
   }
 });
 
-app.post("/api/classes/:id/students", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.post("/api/classes/:id/students", authenticate, requireRole("teacher"), async (req, res) => {
   const studentId = String(req.body.studentId || "").trim();
   if (!studentId) return res.status(400).json({ error: "生徒を選択してください。" });
   try {
@@ -593,12 +593,12 @@ app.post("/api/classes/:id/students", authenticate, requireRole("teacher", "teac
 });
 
 /* Material folders */
-app.get("/api/folders", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.get("/api/folders", authenticate, requireRole("teacher"), async (req, res) => {
   const rows = await listRows("folders", [], 100);
   res.json({ success: true, folders: rows.rows });
 });
 
-app.post("/api/folders", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.post("/api/folders", authenticate, requireRole("teacher"), async (req, res) => {
   const name = String(req.body.name || "").trim();
   const parentId = String(req.body.parentId || "").trim() || null;
   if (!name) return res.status(400).json({ error: "フォルダー名を入力してください。" });
@@ -617,12 +617,12 @@ app.post("/api/folders", authenticate, requireRole("teacher", "teacher"), async 
 });
 
 /* PDF material library */
-app.get("/api/materials", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.get("/api/materials", authenticate, requireRole("teacher"), async (req, res) => {
   const result = await listRows("materials", [], 100);
   res.json({ success: true, materials: result.rows });
 });
 
-app.post("/api/materials", authenticate, requireRole("teacher", "teacher"), upload.fields([
+app.post("/api/materials", authenticate, requireRole("teacher"), upload.fields([
   { name: "file", maxCount: 1 },
   { name: "answerFile", maxCount: 1 }
 ]), async (req, res) => {
@@ -710,12 +710,12 @@ app.get("/api/materials/:id/file", authenticate, async (req, res) => {
 });
 
 /* Distribution and assignments */
-app.get("/api/distributions", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.get("/api/distributions", authenticate, requireRole("teacher"), async (req, res) => {
   const result = await listRows("distributions", [], 100);
   res.json({ success: true, distributions: result.rows });
 });
 
-app.post("/api/distributions", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.post("/api/distributions", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const title = String(req.body.title || "").trim();
     const classId = String(req.body.classId || "").trim();
@@ -842,8 +842,7 @@ app.put("/api/submissions/:id/pages/:pageNo", authenticate, async (req, res) => 
       return res.status(403).json({ error: "他の生徒の答案は編集できません。" });
     }
     const pageNo = Math.max(1, Number(req.params.pageNo) || 1);
-    const dataKey = req.profile.role === "teacher" || req.profile.role === "teacher"
-      ? "teacherData" : "studentData";
+    const dataKey = req.profile.role === "teacher" ? "teacherData" : "studentData";
     const json = JSON.stringify(req.body.strokes || []);
     if (json.length > 1500000) return res.status(413).json({ error: "このページの書き込み量が上限を超えています。" });
 
@@ -888,7 +887,7 @@ app.post("/api/submissions/:id/submit", authenticate, async (req, res) => {
 });
 
 /* Teacher progress and grading */
-app.get("/api/classes/:id/progress", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.get("/api/classes/:id/progress", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const enrollments = await listRows("enrollments", [
       Query.equal("classId", req.params.id),
@@ -918,7 +917,7 @@ app.get("/api/classes/:id/progress", authenticate, requireRole("teacher", "teach
   }
 });
 
-app.get("/api/grading/:submissionId", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.get("/api/grading/:submissionId", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const submission = await getRow("submissions", req.params.submissionId);
     const assignment = await getRow("assignments", submission.assignmentId);
@@ -942,7 +941,7 @@ app.get("/api/grading/:submissionId", authenticate, requireRole("teacher", "teac
   }
 });
 
-app.post("/api/grading/:submissionId", authenticate, requireRole("teacher", "teacher"), async (req, res) => {
+app.post("/api/grading/:submissionId", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const submission = await getRow("submissions", req.params.submissionId);
     const assignment = await getRow("assignments", submission.assignmentId);
