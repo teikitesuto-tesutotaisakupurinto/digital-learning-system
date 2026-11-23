@@ -35,7 +35,7 @@ async function materials(){
  try{
   const [fr,mr]=await Promise.all([api("/api/folders"),api("/api/materials")]);
   const folders=fr.folders||[],items=mr.materials||[],map=new Map(folders.map(x=>[x.$id,x]));
-  let current=null,viewMode="list",sortMode="name",query="";
+  let current=null,viewMode="list",sortMode="name",query="",libraryView="drive";
   const selected=new Set();
   const folderPath=id=>pathForFolder(id,map);
   const descendants=id=>folderDescendants(id,folders);
@@ -82,29 +82,42 @@ async function materials(){
   };
   const allRows=()=>{
    const isSearch=!!query.trim(),q=query.trim().toLocaleLowerCase();
-   let fs=isSearch?folders.filter(x=>String(x.name||"").toLocaleLowerCase().includes(q)):folders.filter(x=>(x.parentId||null)===(current||null));
-   let ms=isSearch?items.filter(x=>(String(x.title||"")+" "+String(x.fileName||"")).toLocaleLowerCase().includes(q)):items.filter(x=>(x.folderId||null)===(current||null));
-   const cmp=(a,b)=>sortMode==="newest"?String(b.$createdAt||"").localeCompare(String(a.$createdAt||"")):String(a.name||a.title||"").localeCompare(String(b.name||b.title||""),"ja");
+   const visible=x=>libraryView==="trash"?x.isTrashed===true:libraryView==="starred"?!x.isTrashed&&x.isStarred===true:!x.isTrashed;
+   let fs=folders.filter(visible).filter(x=>libraryView!=="drive"||isSearch||(x.parentId||null)===(current||null));
+   let ms=items.filter(visible).filter(x=>libraryView!=="drive"||isSearch||(x.folderId||null)===(current||null));
+   if(isSearch&&libraryView==="drive"){fs=fs.filter(x=>String(x.name||"").toLocaleLowerCase().includes(q));ms=ms.filter(x=>(String(x.title||"")+" "+String(x.fileName||"")).toLocaleLowerCase().includes(q))}
+   const cmp=(a,b)=>sortMode==="newest"?String(b.$updatedAt||b.$createdAt||"").localeCompare(String(a.$updatedAt||a.$createdAt||"")):String(a.name||a.title||"").localeCompare(String(b.name||b.title||""),"ja");
    fs.sort(cmp);ms.sort(cmp);return {fs,ms,isSearch};
+  };
+  const changeFlag=async(type,id,patch)=>{
+   const item=(type==="folder"?folders:items).find(x=>x.$id===id);
+   const result=await api((type==="folder"?"/api/folders/":"/api/materials/")+id,{method:"PATCH",body:JSON.stringify(patch)});
+   Object.assign(item,type==="folder"?result.folder:result.material);
+   if(type==="folder"&&patch.isTrashed!==undefined){
+    const descendants=folderDescendants(id,folders);
+    for(const childId of descendants){const child=map.get(childId);if(child)Object.assign(child,{isTrashed:patch.isTrashed,trashedAt:patch.isTrashed?new Date().toISOString():null})}
+    for(const material of items)if(descendants.has(material.folderId))Object.assign(material,{isTrashed:patch.isTrashed,trashedAt:patch.isTrashed?new Date().toISOString():null});
+   }
+   render();
   };
   const render=()=>{
    const {fs,ms,isSearch}=allRows(),crumbs=folderPath(current);
    const selectionCount=selected.size;
    const rows=fs.map(f=>{
     const key="f:"+f.$id,active=selected.has(key);
-    return '<div class="drive-row folder-row" draggable="true" data-drag-type="folder" data-drag-id="'+f.$id+'" data-drop-folder="'+f.$id+'"><input aria-label="選択 '+esc(f.name)+'" type="checkbox" data-select="'+key+'" '+(active?"checked":"")+'><span class="drive-icon folder-symbol" aria-hidden="true">▰</span><button type="button" class="drive-name" data-open="'+f.$id+'">'+esc(f.name)+'</button><span class="drive-type">フォルダ</span><span class="drive-date">'+esc(f.$updatedAt?new Date(f.$updatedAt).toLocaleDateString("ja-JP"):"—")+'</span><div class="drive-actions"><button type="button" data-rename-folder="'+f.$id+'">名前変更</button><button type="button" data-move-single="'+key+'">移動</button></div></div>';
+    return '<div class="drive-row folder-row" draggable="true" data-drag-type="folder" data-drag-id="'+f.$id+'" data-drop-folder="'+f.$id+'"><input aria-label="選択 '+esc(f.name)+'" type="checkbox" data-select="'+key+'" '+(active?"checked":"")+'><span class="drive-icon folder-symbol" aria-hidden="true">▰</span><button type="button" class="drive-name" data-open="'+f.$id+'">'+esc(f.name)+'</button><span class="drive-type">フォルダ</span><span class="drive-date">'+esc(f.$updatedAt?new Date(f.$updatedAt).toLocaleDateString("ja-JP"):"—")+'</span><div class="drive-actions">'+(libraryView==="trash"?'<button type="button" data-restore-folder="'+f.$id+'">復元</button>':'<button type="button" data-star-folder="'+f.$id+'">'+(f.isStarred?"スター解除":"スター")+'</button><button type="button" data-trash-folder="'+f.$id+'">ゴミ箱へ</button><button type="button" data-rename-folder="'+f.$id+'">名前変更</button><button type="button" data-move-single="'+key+'">移動</button>')+'</div></div>';
    }).join("");
    const fileRows=ms.map(m=>{
     const key="m:"+m.$id,active=selected.has(key);
-    return '<div class="drive-row file-row-drive" draggable="true" data-drag-type="material" data-drag-id="'+m.$id+'"><input aria-label="選択 '+esc(m.title)+'" type="checkbox" data-select="'+key+'" '+(active?"checked":"")+'><span class="drive-icon pdf-symbol" aria-hidden="true">PDF</span><button type="button" class="drive-name" data-preview="'+m.$id+'">'+esc(m.title)+'</button><span class="drive-type">PDF ドキュメント</span><span class="drive-date">'+esc(m.$updatedAt?new Date(m.$updatedAt).toLocaleDateString("ja-JP"):"—")+'</span><div class="drive-actions"><button type="button" data-preview="'+m.$id+'">プレビュー</button><button type="button" data-rename-material="'+m.$id+'">名前変更</button><button type="button" data-move-single="'+key+'">移動</button></div></div>';
+    return '<div class="drive-row file-row-drive" draggable="true" data-drag-type="material" data-drag-id="'+m.$id+'"><input aria-label="選択 '+esc(m.title)+'" type="checkbox" data-select="'+key+'" '+(active?"checked":"")+'><span class="drive-icon pdf-symbol" aria-hidden="true">PDF</span><button type="button" class="drive-name" data-preview="'+m.$id+'">'+esc(m.title)+'</button><span class="drive-type">PDF ドキュメント</span><span class="drive-date">'+esc(m.$updatedAt?new Date(m.$updatedAt).toLocaleDateString("ja-JP"):"—")+'</span><div class="drive-actions">'+(libraryView==="trash"?'<button type="button" data-restore-material="'+m.$id+'">復元</button>':'<button type="button" data-star-material="'+m.$id+'">'+(m.isStarred?"スター解除":"スター")+'</button><button type="button" data-trash-material="'+m.$id+'">ゴミ箱へ</button><button type="button" data-preview="'+m.$id+'">プレビュー</button><button type="button" data-rename-material="'+m.$id+'">名前変更</button><button type="button" data-move-single="'+key+'">移動</button>')+'</div></div>';
    }).join("");
    const gridRows=fs.map(f=>'<div class="drive-card-wrap" draggable="true" data-drag-type="folder" data-drag-id="'+f.$id+'" data-drop-folder="'+f.$id+'"><input aria-label="選択 '+esc(f.name)+'" type="checkbox" data-select="f:'+f.$id+'" '+(selected.has("f:"+f.$id)?"checked":"") +'><button type="button" class="drive-card" data-open="'+f.$id+'"><span class="drive-card-icon folder-symbol">▰</span><span>'+esc(f.name)+'</span><small>フォルダ</small></button></div>').join("")+ms.map(m=>'<div class="drive-card-wrap"><input aria-label="選択 '+esc(m.title)+'" type="checkbox" data-select="m:'+m.$id+'" '+(selected.has("m:"+m.$id)?"checked":"") +'><button type="button" class="drive-card" data-preview="'+m.$id+'"><span class="drive-card-icon pdf-symbol">PDF</span><span>'+esc(m.title)+'</span><small>PDF ドキュメント</small></button></div>').join("");
    v.innerHTML=
     '<div class="drive-shell">'+
-     '<aside class="drive-rail"><button type="button" class="drive-new" id="drive-new">＋ 新規</button><button type="button" class="drive-rail-link active" id="drive-home">▣ マイドライブ</button><div class="drive-rail-note">教材ライブラリ</div><a class="drive-rail-link" href="/teacher/distribution.html">↗ 教材配信</a></aside>'+
+     '<aside class="drive-rail"><button type="button" class="drive-new" id="drive-new">新規作成</button><button type="button" class="drive-rail-link '+(libraryView==="drive"?"active":"")+'" id="drive-home">マイドライブ</button><button type="button" class="drive-rail-link '+(libraryView==="starred"?"active":"")+'" id="drive-starred">スター付き</button><button type="button" class="drive-rail-link '+(libraryView==="trash"?"active":"")+'" id="drive-trash">ゴミ箱</button><div class="drive-rail-note">教材ライブラリ</div><a class="drive-rail-link" href="/teacher/distribution.html">教材配信</a></aside>'+
      '<section class="drive-main">'+
       '<div class="drive-topline"><div class="drive-search"><span aria-hidden="true">⌕</span><input id="drive-search" type="search" placeholder="ドライブ内を検索" value="'+esc(query)+'"></div><button type="button" class="drive-upload" id="drive-upload">アップロード</button></div>'+
-      '<div class="drive-heading"><div><div class="breadcrumbs"><a href="#" data-root>マイドライブ</a>'+(!isSearch?crumbs.map(x=>' <span>›</span> <a href="#" data-crumb="'+x.$id+'">'+esc(x.name)+'</a>').join(""):"")+'</div><h2>'+(isSearch?"検索結果":(crumbs.length?esc(crumbs[crumbs.length-1].name):"マイドライブ"))+'</h2></div><div class="drive-view-tools"><label>並べ替え <select id="drive-sort"><option value="name" '+(sortMode==="name"?"selected":"")+'>名前</option><option value="newest" '+(sortMode==="newest"?"selected":"")+'>更新日時</option></select></label><button type="button" class="'+(viewMode==="list"?"active":"")+'" id="drive-list" aria-label="リスト表示">☷</button><button type="button" class="'+(viewMode==="grid"?"active":"")+'" id="drive-grid" aria-label="グリッド表示">▦</button></div></div>'+
+      '<div class="drive-heading"><div><div class="breadcrumbs"><a href="#" data-root>マイドライブ</a>'+(!isSearch?crumbs.map(x=>' <span>›</span> <a href="#" data-crumb="'+x.$id+'">'+esc(x.name)+'</a>').join(""):"")+'</div><h2>'+(libraryView==="trash"?"ゴミ箱":libraryView==="starred"?"スター付き":isSearch?"検索結果":(crumbs.length?esc(crumbs[crumbs.length-1].name):"マイドライブ"))+'</h2></div><div class="drive-view-tools"><label>並べ替え <select id="drive-sort"><option value="name" '+(sortMode==="name"?"selected":"")+'>名前</option><option value="newest" '+(sortMode==="newest"?"selected":"")+'>更新日時</option></select></label><button type="button" class="'+(viewMode==="list"?"active":"")+'" id="drive-list" aria-label="リスト表示">☷</button><button type="button" class="'+(viewMode==="grid"?"active":"")+'" id="drive-grid" aria-label="グリッド表示">▦</button></div></div>'+
       '<div class="drive-selection '+(selectionCount?"shown":"")+'" id="drive-selection"><span>'+selectionCount+'件を選択中</span><button type="button" id="drive-clear">選択解除</button><button type="button" id="drive-move">移動</button><button type="button" id="drive-distribute">選択項目を配信</button></div>'+
       '<div class="drive-content '+(viewMode==="grid"?"grid-mode":"list-mode")+'" id="drive-content">'+(viewMode==="grid"?'<div class="drive-grid">'+(gridRows||'<div class="drive-empty">この場所には項目がありません。</div>')+'</div>':'<div class="drive-list-head"><label><input type="checkbox" id="drive-select-all"> 名前</label><span>種類</span><span>更新日時</span><span>操作</span></div><div class="drive-list">'+(rows+fileRows||'<div class="drive-empty">この場所には項目がありません。</div>')+'</div>')+'</div>'+
       '<div class="drive-drop-hint">フォルダをここへドラッグすると移動できます。</div>'+
@@ -120,6 +133,12 @@ async function materials(){
    v.querySelectorAll("[data-preview]").forEach(a=>a.onclick=()=>{const m=items.find(x=>x.$id===a.dataset.preview);preview(m).catch(e=>notice(e.message))});
    v.querySelectorAll("[data-select]").forEach(el=>el.onchange=()=>{el.checked?selected.add(el.dataset.select):selected.delete(el.dataset.select);renderSelection()});
    v.querySelectorAll("[data-rename-folder]").forEach(el=>el.onclick=()=>rename("folder",el.dataset.renameFolder));
+   v.querySelectorAll("[data-star-folder]").forEach(el=>el.onclick=()=>changeFlag("folder",el.dataset.starFolder,{isStarred:!map.get(el.dataset.starFolder).isStarred}).catch(e=>notice(e.message)));
+   v.querySelectorAll("[data-star-material]").forEach(el=>el.onclick=()=>{const m=items.find(x=>x.$id===el.dataset.starMaterial);changeFlag("material",m.$id,{isStarred:!m.isStarred}).catch(e=>notice(e.message))});
+   v.querySelectorAll("[data-trash-folder]").forEach(el=>el.onclick=()=>{if(confirm("フォルダと中の教材をゴミ箱へ移動しますか？"))changeFlag("folder",el.dataset.trashFolder,{isTrashed:true}).catch(e=>notice(e.message))});
+   v.querySelectorAll("[data-trash-material]").forEach(el=>el.onclick=()=>{if(confirm("この教材をゴミ箱へ移動しますか？"))changeFlag("material",el.dataset.trashMaterial,{isTrashed:true}).catch(e=>notice(e.message))});
+   v.querySelectorAll("[data-restore-folder]").forEach(el=>el.onclick=()=>changeFlag("folder",el.dataset.restoreFolder,{isTrashed:false}).catch(e=>notice(e.message)));
+   v.querySelectorAll("[data-restore-material]").forEach(el=>el.onclick=()=>changeFlag("material",el.dataset.restoreMaterial,{isTrashed:false}).catch(e=>notice(e.message)));
    v.querySelectorAll("[data-rename-material]").forEach(el=>el.onclick=()=>rename("material",el.dataset.renameMaterial));
    v.querySelectorAll("[data-move-single]").forEach(el=>el.onclick=()=>{selected.clear();selected.add(el.dataset.moveSingle);$("#drive-move-dialog").showModal()});
    const renderSelection=()=>{const box=$("#drive-selection");box.classList.toggle("shown",selected.size>0);box.querySelector("span").textContent=selected.size+"件を選択中"};
@@ -130,7 +149,9 @@ async function materials(){
    $("#drive-grid").onclick=()=>{viewMode="grid";render()};
    $("#drive-sort").onchange=e=>{sortMode=e.target.value;render()};
    $("#drive-search").oninput=e=>{query=e.target.value;const pos=e.target.selectionStart;render();const input=$("#drive-search");input.focus();input.setSelectionRange(pos,pos)};
-   $("#drive-home").onclick=()=>{current=null;query="";render()};
+   $("#drive-home").onclick=()=>{libraryView="drive";current=null;query="";render()};
+   $("#drive-starred").onclick=()=>{libraryView="starred";current=null;query="";render()};
+   $("#drive-trash").onclick=()=>{libraryView="trash";current=null;query="";render()};
    $("#drive-new").onclick=()=>$("#drive-new-dialog").showModal();
    $("#drive-create-folder").onclick=()=>{$("#drive-new-dialog").close();makeFolder(current)};
    $("#drive-create-upload").onclick=()=>{$("#drive-new-dialog").close();$("#drive-upload-panel").classList.remove("hidden")};
