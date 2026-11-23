@@ -35,7 +35,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;p
 import {Client,Account} from "https://cdn.jsdelivr.net/npm/appwrite@17.0.0/+esm";
 const client=new Client().setEndpoint("https://sgp.cloud.appwrite.io/v1").setProject("6b03d796003d1c4e4943");
 const account=new Account(client),$=s=>document.querySelector(s);
-const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;',"'" :"&#39;"}[c]));
+const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
 let jwt="";
 async function api(url,options={}){if(!jwt)jwt=(await account.createJWT()).jwt;const headers={Authorization:"Bearer "+jwt,...(options.headers||{})};if(options.body)headers["Content-Type"]="application/json";const r=await fetch(url,{...options,headers});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||"処理に失敗しました。");return data}
 function notice(message){$("#notice").textContent=message;$("#notice").classList.add("show")}
