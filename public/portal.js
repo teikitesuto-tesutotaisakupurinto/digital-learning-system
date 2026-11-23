@@ -6,7 +6,7 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const teacherLinks=[["ダッシュボード","/teacher/dashboard.html"],["教材ライブラリ","/teacher/materials.html"],["教材配信","/teacher/distribution.html"],["提出状況・添削","/teacher/progress.html"]];
 const studentLinks=[["学習ホーム","/student/dashboard.html"]];
 const path=location.pathname;
-async function token(){const t=await account.createJWT();return t.jwt}
+let cachedJwt="",cachedJwtUntil=0,jwtRequest=null;async function token(){if(cachedJwt&&Date.now()<cachedJwtUntil)return cachedJwt;if(jwtRequest)return jwtRequest;jwtRequest=account.createJWT().then(t=>{cachedJwt=t.jwt;cachedJwtUntil=Date.now()+9*60*1000;return cachedJwt}).finally(()=>{jwtRequest=null});return jwtRequest}
 async function api(url,options={}){const jwt=await token();const headers={Authorization:"Bearer "+jwt,...(options.headers||{})};if(options.body&&!(options.body instanceof FormData))headers["Content-Type"]="application/json";const r=await fetch(url,{...options,headers});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||"処理に失敗しました。");return data}
 function notice(msg,ok=false){const el=$("#notice");if(el){el.textContent=msg;el.className="message "+(ok?"success":"error")}}
 function shell(title,links){
@@ -199,14 +199,17 @@ async function distribution(){
  }catch(e){notice(e.message)}
 }
 async function progress(){
- shell("クラス別・学習進捗",teacherLinks);const v=$("#view");let classStream=null,refreshTimer=null;
+ shell("クラス別・学習進捗",teacherLinks);const v=$("#view");let classStream=null,refreshTimer=null,progressLoading=false,progressReloadQueued=false;
  try{
   const cr=await api("/api/classes");
   v.innerHTML='<section class="panel"><label class="field">クラス<select id="class-select">'+cr.classes.map(x=>'<option value="'+x.$id+'">'+esc(x.name)+'</option>').join("")+'</select></label><div class="muted small" id="class-live-status">クラス全体の状況を読み込んでいます。</div></section><div id="progress-list" class="class-progress-grid"></div>';
   const tileStyle=document.createElement("style");tileStyle.textContent=".class-progress-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:16px;margin-top:16px}.class-student-tile{border:1px solid var(--border-color,#d8dee8);border-radius:12px;background:var(--surface,#fff);padding:16px;min-width:0}.class-student-tile-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;border-bottom:1px solid var(--border-color,#e4e8ef);padding-bottom:12px}.class-student-tile-head h3{margin:0 0 4px}.class-student-state{font-size:12px;white-space:nowrap}.class-student-summary{display:flex;align-items:baseline;gap:6px;padding:12px 0}.class-student-summary strong{font-size:24px;font-weight:650}.class-student-items{display:grid;gap:8px}.class-progress-item{border-top:1px solid var(--border-color,#e4e8ef);padding-top:9px}.class-progress-item-title{font-weight:600}.class-progress-meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted,#667085);margin-top:5px}.class-progress-actions{margin-top:6px;font-size:13px}";document.head.append(tileStyle);
   const load=async()=>{
    if(refreshTimer)clearTimeout(refreshTimer);
+   if(progressLoading){progressReloadQueued=true;return}
    const classId=$("#class-select").value;if(!classId)return;
+   progressLoading=true;
+   try{
    const d=await api("/api/classes/"+classId+"/progress");
    const statusLabel={locked:"配信前",available:"未着手",in_progress:"学習中",submitted:"提出済み",returned:"再提出",passed:"確認済み"};
    $("#progress-list").innerHTML=d.students.map(st=>{
@@ -219,13 +222,20 @@ async function progress(){
     return '<article class="class-student-tile"><div class="class-student-tile-head"><div><h3>'+esc(st.studentName||st.studentId)+'</h3><span class="muted small">'+total+'教材</span></div><span class="class-student-state">'+(active?"学習中":done===total&&total?"提出・確認済み":"進捗確認")+'</span></div><div class="class-student-summary"><strong>'+done+'</strong><span>/ '+total+' 完了・提出</span></div><div class="class-student-items">'+items+'</div></article>';
    }).join("")||'<section class="panel">このクラスに在籍している生徒はいません。</section>';
    $("#class-live-status").textContent="クラス全員の状況を表示中。更新はリアルタイムで反映されます。";
+   }finally{
+    progressLoading=false;
+    if(progressReloadQueued){progressReloadQueued=false;refreshTimer=setTimeout(()=>load().catch(e=>notice(e.message)),180)}
+   }
   };
   const connect=async()=>{
    if(classStream){classStream.close();classStream=null}
    const classId=$("#class-select").value;if(!classId)return;
-   await load();
    const jwt=await token();classStream=new EventSource("/api/teacher/class-stream/"+encodeURIComponent(classId)+"?token="+encodeURIComponent(jwt));
-   classStream.addEventListener("refresh",()=>load().catch(e=>notice(e.message)));
+   await load();
+   classStream.addEventListener("refresh",()=>{
+    if(refreshTimer)clearTimeout(refreshTimer);
+    refreshTimer=setTimeout(()=>load().catch(e=>notice(e.message)),250);
+   });
    classStream.onerror=()=>{$("#class-live-status").textContent="リアルタイム接続を再接続しています…"};
    classStream.onopen=()=>{$("#class-live-status").textContent="リアルタイム接続中 · クラス全員の状況を表示"};
   };
