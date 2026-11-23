@@ -162,3 +162,18 @@ footer{background:#f9fbfd;border-color:var(--line);color:#9aa5b3;font-size:9px;l
 .drive-preview-dialog{border-radius:12px}
 @media(max-width:850px){.topbar{padding:0 18px}.workspace-label{display:none}.layout{grid-template-columns:190px minmax(0,1fr)}.content{padding:24px 20px}.drive-main{padding:18px}.drive-shell{grid-template-columns:170px minmax(0,1fr)}}
 @media(max-width:650px){.topbar{height:60px;padding:0 12px}.topbar-brand{min-width:0}.brand small{display:none}.user-name{display:none}.layout{grid-template-columns:1fr}.sidebar{flex-direction:row;overflow:auto;padding:8px;border-right:0;border-bottom:1px solid var(--line)}.sidebar-caption,.sidebar-spacer,.sidebar-foot{display:none}.sidebar a{white-space:nowrap;padding:9px 10px}.content{padding:18px 12px}.drive-shell{grid-template-columns:1fr}.drive-rail{flex-direction:row;align-items:center;overflow:auto;border-right:0;border-bottom:1px solid var(--line);padding:10px}.drive-rail-note{display:none}.drive-new{margin:0;flex:none}.drive-main{padding:14px}.drive-list-head,.drive-row{grid-template-columns:26px minmax(120px,1fr) 100px}.drive-list-head span:nth-child(2),.drive-list-head span:nth-child(3),.drive-row .drive-type,.drive-row .drive-date{display:none}.drive-actions{grid-column:2/-1;justify-content:flex-start;opacity:1}.drive-row{padding:8px}.drive-heading{align-items:flex-start;flex-direction:column}}
+
+/* Teacher command center */
+.dashboard-intro{display:grid;grid-template-columns:minmax(220px,.9fr) minmax(420px,1.1fr);gap:24px;align-items:center;margin:0 0 18px;padding:25px 27px;border:1px solid #dce5ef;border-radius:12px;background:linear-gradient(112deg,#f8fbff 0%,#eef4fa 100%)}
+.dashboard-kicker{font-size:9px;font-weight:800;letter-spacing:.17em;color:#6e87a1}
+.dashboard-intro h2{font-size:20px;letter-spacing:-.035em;color:#1d3551;margin:9px 0 7px}
+.dashboard-intro p{font-size:11px;color:#728197;line-height:1.8;margin:0}
+.dashboard-shortcuts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.dashboard-shortcuts a{display:flex;align-items:flex-start;gap:10px;min-height:75px;padding:13px 11px;background:#fff;border:1px solid #e0e8f0;border-radius:8px;text-decoration:none;transition:border-color .15s,transform .15s}
+.dashboard-shortcuts a:hover{border-color:#9db8d3;transform:translateY(-1px)}
+.shortcut-mark{display:grid;place-items:center;width:25px;height:25px;flex:none;border-radius:6px;background:#edf3f9;color:#37658e;font-size:9px;font-weight:800}
+.dashboard-shortcuts strong,.dashboard-shortcuts small{display:block}
+.dashboard-shortcuts strong{font-size:10px;color:#29435f;margin:2px 0 5px}
+.dashboard-shortcuts small{font-size:9px;color:#8794a5;line-height:1.5}
+@media(max-width:1000px){.dashboard-intro{grid-template-columns:1fr}.dashboard-shortcuts{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:650px){.dashboard-intro{padding:18px;gap:16px}.dashboard-shortcuts{grid-template-columns:1fr}.dashboard-shortcuts a{min-height:58px}}
