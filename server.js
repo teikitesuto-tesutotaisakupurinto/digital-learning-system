@@ -1052,14 +1052,15 @@ app.get("/api/system/status", async (req, res) => {
   }
 });
 
-/* Static files */
-app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "login.html"), error => {
-    if (error) res.status(404).send("login.html is not deployed yet.");
+/* Static files and explicit entry routes */
+const PUBLIC_DIR = path.join(__dirname, "public");
+app.get("/login.html", (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "login.html"), error => {
+    if (error && !res.headersSent) res.status(404).type("text").send("Login page file is missing from the deployed public directory.");
   });
 });
+app.get("/", (req, res) => res.redirect(302, "/login.html"));
+app.use(express.static(PUBLIC_DIR, { extensions: ["html"], index: false }));
 
 app.use("/api", (req, res) => res.status(404).json({ error: "API endpoint not found." }));
 
