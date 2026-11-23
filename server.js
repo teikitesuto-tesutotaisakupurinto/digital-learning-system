@@ -21,6 +21,16 @@ if (!ENDPOINT || !PROJECT_ID || !API_KEY) {
 }
 
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use((req,res,next)=>{
+  res.setHeader("X-Content-Type-Options","nosniff");
+  res.setHeader("X-Frame-Options","DENY");
+  res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy","camera=(), microphone=(), geolocation=()");
+  res.setHeader("Cross-Origin-Resource-Policy","same-origin");
+  if(req.path.startsWith("/api/")) res.setHeader("Cache-Control","private, no-store");
+  next();
+});
 app.use(express.json({ limit: "3mb" }));
 app.use(express.urlencoded({ extended: true, limit: "3mb" }));
 
@@ -377,6 +387,24 @@ function requireRole(...roles) {
     next();
   };
 }
+// Current single-organization boundary: each teacher owns their own classes and resources.
+// Separate school tenants and shared staff access require a schoolId-based migration before multi-school sales.
+async function teacherOwnsClass(req,classId) {
+  if(req.profile.role!=="teacher") return false;
+  const row=await getRow("classes",classId).catch(()=>null);
+  return Boolean(row && row.createdBy===req.authUser.$id);
+}
+async function teacherOwnsAssignment(req,assignment) {
+  return Boolean(assignment && await teacherOwnsClass(req,assignment.classId));
+}
+async function teacherOwnsSubmission(req,submission) {
+  if(!submission) return false;
+  const assignment=await getRow("assignments",submission.assignmentId).catch(()=>null);
+  return teacherOwnsAssignment(req,assignment);
+}
+async function teacherOwnsMaterial(req,material) {
+  return Boolean(material && material.createdBy===req.authUser.$id);
+}
 
 async function findMaterial(materialId) {
   return getRow("materials", materialId);
@@ -470,11 +498,13 @@ app.get("/api/me", authenticate, (req, res) => {
 /* Users */
 app.get("/api/users", authenticate, requireRole("teacher"), async (req, res) => {
   try {
-    const role = req.query.role;
-    const queries = [];
-    if (role && ["teacher", "teacher", "student"].includes(role)) queries.push(Query.equal("role", role));
-    const result = await listRows("users", queries, 100);
-    res.json({ success: true, users: result.rows });
+    const role=req.query.role;
+    if(role && !["teacher","student"].includes(role)) return res.status(400).json({error:"指定されたユーザー種別は無効です。"});
+    const classes=await listRows("classes",[Query.equal("createdBy",req.authUser.$id)],500);
+    const enrollments=await Promise.all(classes.rows.map(row=>listRows("enrollments",[Query.equal("classId",row.$id),Query.equal("status","active")],500)));
+    const studentIds=new Set(enrollments.flatMap(result=>result.rows.map(row=>row.studentId)));
+    const result=await listRows("users",role?[Query.equal("role",role)]:[],500);
+    res.json({success:true,users:result.rows.filter(user=>user.role==="teacher"?user.authUserId===req.authUser.$id:studentIds.has(user.authUserId))});
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "ユーザー一覧を取得できませんでした。" });
@@ -542,8 +572,8 @@ app.get("/api/classes", authenticate, async (req, res) => {
       const classes = await Promise.all(ids.map(id => getRow("classes", id).catch(() => null)));
       return res.json({ success: true, classes: classes.filter(Boolean) });
     }
-    const result = await listRows("classes", [Query.equal("status", "active")], 100);
-    res.json({ success: true, classes: result.rows });
+    const result=await listRows("classes",[Query.equal("status","active"),Query.equal("createdBy",req.authUser.$id)],500);
+    res.json({success:true,classes:result.rows});
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "クラス一覧を取得できませんでした。" });
@@ -571,6 +601,7 @@ app.post("/api/classes", authenticate, requireRole("teacher"), async (req, res) 
 
 app.get("/api/classes/:id/students", authenticate, requireRole("teacher"), async (req, res) => {
   try {
+    if(!(await teacherOwnsClass(req,req.params.id))) return res.status(404).json({error:"クラスが見つからないか、閲覧権限がありません。"});
     const rows = await listRows("enrollments", [
       Query.equal("classId", req.params.id),
       Query.equal("status", "active")
@@ -585,6 +616,7 @@ app.post("/api/classes/:id/students", authenticate, requireRole("teacher"), asyn
   const studentId = String(req.body.studentId || "").trim();
   if (!studentId) return res.status(400).json({ error: "生徒を選択してください。" });
   try {
+    if(!(await teacherOwnsClass(req,req.params.id))) return res.status(404).json({error:"クラスが見つからないか、編集権限がありません。"});
     const studentResult = await listRows("users", [
       Query.equal("authUserId", studentId),
       Query.equal("role", "student")
@@ -612,8 +644,8 @@ app.post("/api/classes/:id/students", authenticate, requireRole("teacher"), asyn
 
 /* Material folders */
 app.get("/api/folders", authenticate, requireRole("teacher"), async (req, res) => {
-  const rows = await listRows("folders", [], 100);
-  res.json({ success: true, folders: rows.rows });
+  const rows=await listRows("folders",[Query.equal("createdBy",req.authUser.$id)],500);
+  res.json({success:true,folders:rows.rows});
 });
 
 app.post("/api/folders", authenticate, requireRole("teacher"), async (req, res) => {
@@ -621,7 +653,8 @@ app.post("/api/folders", authenticate, requireRole("teacher"), async (req, res) 
   const parentId = String(req.body.parentId || "").trim() || null;
   if (!name) return res.status(400).json({ error: "フォルダー名を入力してください。" });
   try {
-    const parent = parentId ? await getRow("folders", parentId) : null;
+    const parent=parentId?await getRow("folders",parentId):null;
+    if(parent && parent.createdBy!==req.authUser.$id) return res.status(404).json({error:"親フォルダが見つかりません。"});
     const folder = await createRow("folders", {
       name,
       parentId,
@@ -639,8 +672,8 @@ app.post("/api/folders", authenticate, requireRole("teacher"), async (req, res) 
 
 app.patch("/api/folders/:id", authenticate, requireRole("teacher"), async (req, res) => {
   try {
-    const folders = (await listRows("folders", [], 500)).rows;
-    const current = folders.find(x => x.$id === req.params.id);
+    const folders=(await listRows("folders",[Query.equal("createdBy",req.authUser.$id)],1000)).rows;
+    const current=folders.find(x=>x.$id===req.params.id);
     if (!current) return res.status(404).json({ error: "フォルダが見つかりません。" });
     const nextName = String(req.body.name ?? current.name).trim();
     const nextParentId = req.body.parentId === undefined ? (current.parentId || null) : (String(req.body.parentId || "").trim() || null);
@@ -688,7 +721,7 @@ app.patch("/api/folders/:id", authenticate, requireRole("teacher"), async (req, 
     };
     await refresh(current.$id);
     if (req.body.isTrashed !== undefined) {
-      const affectedMaterials = await listRows("materials", [], 500);
+      const affectedMaterials=await listRows("materials",[Query.equal("createdBy",req.authUser.$id)],1000);
       for (const material of affectedMaterials.rows) {
         if (material.folderId && descendants.has(material.folderId)) {
           await updateRow("materials", material.$id, {
@@ -708,7 +741,8 @@ app.patch("/api/folders/:id", authenticate, requireRole("teacher"), async (req, 
 /* PDF material library */
 app.patch("/api/materials/:id", authenticate, requireRole("teacher"), async (req, res) => {
   try {
-    const material = await getRow("materials", req.params.id);
+    const material=await getRow("materials",req.params.id);
+    if(!(await teacherOwnsMaterial(req,material))) return res.status(404).json({error:"教材が見つからないか、編集権限がありません。"});
     const data = {};
     if (req.body.title !== undefined) {
       const title = String(req.body.title || "").trim();
@@ -717,7 +751,7 @@ app.patch("/api/materials/:id", authenticate, requireRole("teacher"), async (req
     }
     if (req.body.folderId !== undefined) {
       const folderId = String(req.body.folderId || "").trim() || null;
-      if (folderId) await getRow("folders", folderId);
+      if(folderId){const folder=await getRow("folders",folderId);if(folder.createdBy!==req.authUser.$id)return res.status(404).json({error:"移動先フォルダが見つかりません。"});}
       data.folderId = folderId;
     }
     if (req.body.isStarred !== undefined) data.isStarred = Boolean(req.body.isStarred);
@@ -733,8 +767,8 @@ app.patch("/api/materials/:id", authenticate, requireRole("teacher"), async (req
 });
 
 app.get("/api/materials", authenticate, requireRole("teacher"), async (req, res) => {
-  const result = await listRows("materials", [], 100);
-  res.json({ success: true, materials: result.rows });
+  const result=await listRows("materials",[Query.equal("createdBy",req.authUser.$id)],500);
+  res.json({success:true,materials:result.rows});
 });
 
 app.post("/api/materials", authenticate, requireRole("teacher"), upload.fields([
@@ -748,7 +782,10 @@ app.post("/api/materials", authenticate, requireRole("teacher"), upload.fields([
     const folderId = String(req.body.folderId || "").trim() || null;
     const description = String(req.body.description || "").trim();
 
-    if (!file || !title) return res.status(400).json({ error: "教材名とPDFファイルを指定してください。" });
+    if(!file||!title)return res.status(400).json({error:"教材名とPDFファイルを指定してください。"});
+    if(title.length>255||description.length>5000)return res.status(400).json({error:"教材名は255文字以内、説明は5000文字以内で入力してください。"});
+    if(folderId){const folder=await getRow("folders",folderId);if(folder.createdBy!==req.authUser.$id)return res.status(404).json({error:"保存先フォルダが見つかりません。"});}
+    if(answerFile&&(answerFile.mimetype!=="application/pdf"||answerFile.buffer.subarray(0,5).toString()!=="%PDF-"))return res.status(400).json({error:"解答ファイルもPDFを指定してください。"});
     if (file.mimetype !== "application/pdf" || file.buffer.subarray(0, 5).toString() !== "%PDF-") {
       return res.status(400).json({ error: "PDFファイルのみ登録できます。" });
     }
@@ -797,11 +834,11 @@ app.get("/api/materials/:id/file", authenticate, async (req, res) => {
     const material = await findMaterial(req.params.id);
     let fileId = material.storageFileId;
 
-    if (req.query.answer === "1") {
-      if (req.profile.role !== "teacher") {
-        return res.status(403).json({ error: "解答ファイルを閲覧する権限がありません。" });
-      }
-      fileId = material.answerFileId;
+    if(req.query.answer==="1"){
+      if(req.profile.role!=="teacher"||!(await teacherOwnsMaterial(req,material)))return res.status(403).json({error:"解答ファイルを閲覧する権限がありません。"});
+      fileId=material.answerFileId;
+    } else if(req.profile.role==="teacher"&&!(await teacherOwnsMaterial(req,material))){
+      return res.status(404).json({error:"教材が見つかりません。"});
     } else if (req.profile.role === "student") {
       const assigned = await listRows("assignments", [
         Query.equal("studentId", req.authUser.$id),
@@ -829,8 +866,8 @@ app.get("/api/materials/:id/file", authenticate, async (req, res) => {
 
 /* Distribution and assignments */
 app.get("/api/distributions", authenticate, requireRole("teacher"), async (req, res) => {
-  const result = await listRows("distributions", [], 100);
-  res.json({ success: true, distributions: result.rows });
+  const result=await listRows("distributions",[Query.equal("createdBy",req.authUser.$id)],500);
+  res.json({success:true,distributions:result.rows});
 });
 
 app.post("/api/distributions", authenticate, requireRole("teacher"), async (req, res) => {
@@ -846,8 +883,8 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
       return res.status(400).json({ error: "配信名・配信先・教材を指定してください。" });
     }
 
-    const allFolders = (await listRows("folders", [], 500)).rows;
-    const allMaterials = (await listRows("materials", [], 500)).rows;
+    const allFolders=(await listRows("folders",[Query.equal("createdBy",req.authUser.$id)],1000)).rows;
+    const allMaterials=(await listRows("materials",[Query.equal("createdBy",req.authUser.$id),Query.equal("isTrashed",false)],1000)).rows;
     const folderSet = new Set(selectedFolderIds);
     let changed = true;
     while (changed) {
@@ -879,7 +916,8 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
 
     for (const target of targets) {
       const classId = String(target.classId || "");
-      const classRow = await getRow("classes", classId);
+      const classRow=await getRow("classes",classId);
+      if(classRow.createdBy!==req.authUser.$id)return res.status(404).json({error:"配信先クラスが見つかりません。"});
       const enrollments = await listRows("enrollments", [
         Query.equal("classId", classId),
         Query.equal("status", "active")
@@ -965,8 +1003,9 @@ app.get("/api/assignments", authenticate, async (req, res) => {
       }));
       return res.json({ success: true, assignments });
     }
-    const result = await listRows("assignments", [], 100);
-    res.json({ success: true, assignments: result.rows });
+    const classes=await listRows("classes",[Query.equal("createdBy",req.authUser.$id)],500);
+    const grouped=await Promise.all(classes.rows.map(row=>listRows("assignments",[Query.equal("classId",row.$id)],1000)));
+    res.json({success:true,assignments:grouped.flatMap(item=>item.rows)});
   } catch (error) {
     res.status(500).json({ error: "課題一覧を取得できませんでした。" });
   }
@@ -976,6 +1015,7 @@ app.get("/api/assignments", authenticate, async (req, res) => {
 app.get("/api/workspace/:assignmentId", authenticate, async (req, res) => {
   try {
     let assignment = await getRow("assignments", req.params.assignmentId);
+    if(req.profile.role==="teacher"&&!(await teacherOwnsAssignment(req,assignment)))return res.status(404).json({error:"課題が見つかりません。"});
     if (!(await canReadAssignment(req, assignment))) {
       return res.status(403).json({ error: "この課題を開く権限がありません。" });
     }
@@ -1082,12 +1122,15 @@ app.post("/api/study-sessions/:id/stop", authenticate, (req, res) =>
 app.put("/api/submissions/:id/pages/:pageNo", authenticate, async (req, res) => {
   try {
     const submission = await getRow("submissions", req.params.id);
-    if (req.profile.role === "student" && submission.studentId !== req.authUser.$id) {
-      return res.status(403).json({ error: "他の生徒の答案は編集できません。" });
-    }
-    const pageNo = Math.max(1, Number(req.params.pageNo) || 1);
-    const dataKey = req.profile.role === "teacher" ? "teacherData" : "studentData";
-    const json = JSON.stringify(req.body.strokes || []);
+    if(req.profile.role==="student"&&submission.studentId!==req.authUser.$id)return res.status(403).json({error:"他の生徒の答案は編集できません。"});
+    const assignment=await getRow("assignments",submission.assignmentId);
+    if(req.profile.role==="teacher"&&!(await teacherOwnsAssignment(req,assignment)))return res.status(404).json({error:"答案が見つかりません。"});
+    if(req.profile.role==="student"&&["submitted","passed"].includes(assignment.status))return res.status(409).json({error:"提出済みの答案は編集できません。"});
+    if(!["teacher","student"].includes(req.profile.role))return res.status(403).json({error:"答案の編集権限がありません。"});
+    const pageNo=Math.max(1,Math.min(500,Number(req.params.pageNo)||1));
+    if(!Array.isArray(req.body.strokes))return res.status(400).json({error:"答案データの形式が正しくありません。"});
+    const dataKey=req.profile.role==="teacher"?"teacherData":"studentData";
+    const json=JSON.stringify(req.body.strokes);
     if (json.length > 1500000) return res.status(413).json({ error: "このページの書き込み量が上限を超えています。" });
 
     const current = await listRows("submission_pages", [
@@ -1105,11 +1148,10 @@ app.put("/api/submissions/:id/pages/:pageNo", authenticate, async (req, res) => 
         teacherData: dataKey === "teacherData" ? json : "[]"
       });
     }
-    if (req.profile.role === "student") {
-      const assignment = await getRow("assignments", submission.assignmentId);
-      if (assignment.studentId !== req.authUser.$id) return res.status(403).json({ error: "答案の更新権限がありません。" });
-      await notifyAssignmentLive(assignment.$id);
+    if(req.profile.role==="student"){
+      if(assignment.studentId!==req.authUser.$id)return res.status(403).json({error:"答案の更新権限がありません。"});
     }
+    await notifyAssignmentLive(assignment.$id);
     res.json({ success: true, page: row });
   } catch (error) {
     console.error(error);
@@ -1208,7 +1250,8 @@ async function notifyAssignmentLive(assignmentId) {
 
 app.get("/api/teacher/live/:assignmentId", authenticate, requireRole("teacher"), async (req, res) => {
   try {
-    const assignment = await getRow("assignments", req.params.assignmentId);
+    const assignment=await getRow("assignments",req.params.assignmentId);
+    if(!(await teacherOwnsAssignment(req,assignment)))return res.status(404).json({error:"課題が見つかりません。"});
     const submission = await findLatestSubmission(assignment.$id, assignment.studentId);
     if (!submission) return res.status(404).json({ error: "答案データがまだありません。" });
     const [material, pages, student, sessions] = await Promise.all([
@@ -1244,6 +1287,7 @@ app.get("/api/teacher/live/:assignmentId", authenticate, requireRole("teacher"),
 
 app.get("/api/classes/:id/progress", authenticate, requireRole("teacher"), async (req, res) => {
   try {
+    if(!(await teacherOwnsClass(req,req.params.id)))return res.status(404).json({error:"クラスが見つかりません。"});
     const [enrollmentResult, assignmentResult] = await Promise.all([
       listRows("enrollments", [
         Query.equal("classId", req.params.id),
@@ -1318,7 +1362,8 @@ app.get("/api/classes/:id/progress", authenticate, requireRole("teacher"), async
 app.get("/api/grading/:submissionId", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const submission = await getRow("submissions", req.params.submissionId);
-    const assignment = await getRow("assignments", submission.assignmentId);
+    const assignment=await getRow("assignments",submission.assignmentId);
+    if(!(await teacherOwnsAssignment(req,assignment)))return res.status(404).json({error:"採点対象が見つかりません。"});
     const material = await getRow("materials", assignment.materialId);
     const pages = await listRows("submission_pages", [
       Query.equal("submissionId", submission.$id)
@@ -1342,11 +1387,13 @@ app.get("/api/grading/:submissionId", authenticate, requireRole("teacher"), asyn
 app.post("/api/grading/:submissionId", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const submission = await getRow("submissions", req.params.submissionId);
-    const assignment = await getRow("assignments", submission.assignmentId);
+    const assignment=await getRow("assignments",submission.assignmentId);
+    if(!(await teacherOwnsAssignment(req,assignment)))return res.status(404).json({error:"採点対象が見つかりません。"});
     const result = req.body.result === "passed" ? "passed" : "returned";
     const score = req.body.score === "" || req.body.score == null ? null : Number(req.body.score);
     const maxScore = req.body.maxScore === "" || req.body.maxScore == null ? null : Number(req.body.maxScore);
-    const feedback = String(req.body.feedback || "").trim();
+    const feedback=String(req.body.feedback||"").trim();
+    if((score!==null&&(!Number.isFinite(score)||score<0))||(maxScore!==null&&(!Number.isFinite(maxScore)||maxScore<=0))||(score!==null&&maxScore!==null&&score>maxScore)||feedback.length>10000)return res.status(400).json({error:"点数または講評の入力内容を確認してください。"});
 
     await createRow("grading_records", {
       submissionId: submission.$id,
