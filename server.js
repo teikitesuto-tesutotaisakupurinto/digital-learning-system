@@ -1064,6 +1064,7 @@ async function updateStudySession(req, res, endSession) {
     };
     if (endSession) data.endedAt = new Date(now).toISOString();
     const updated = await updateRow("study_sessions", session.$id, data);
+    await notifyAssignmentLive(session.assignmentId);
     res.json({ success: true, session: updated });
   } catch (error) {
     console.error("Study session update failed:", error);
@@ -1104,6 +1105,11 @@ app.put("/api/submissions/:id/pages/:pageNo", authenticate, async (req, res) => 
         teacherData: dataKey === "teacherData" ? json : "[]"
       });
     }
+    if (req.profile.role === "student") {
+      const assignment = await getRow("assignments", submission.assignmentId);
+      if (assignment.studentId !== req.authUser.$id) return res.status(403).json({ error: "答案の更新権限がありません。" });
+      await notifyAssignmentLive(assignment.$id);
+    }
     res.json({ success: true, page: row });
   } catch (error) {
     console.error(error);
@@ -1123,6 +1129,7 @@ app.post("/api/submissions/:id/submit", authenticate, async (req, res) => {
     });
     const assignment = await getRow("assignments", submission.assignmentId);
     await updateRow("assignments", assignment.$id, { status: "submitted" });
+    await notifyAssignmentLive(assignment.$id);
     res.json({ success: true, submission: updated });
   } catch (error) {
     res.status(500).json({ error: "提出できませんでした。" });
@@ -1130,6 +1137,75 @@ app.post("/api/submissions/:id/submit", authenticate, async (req, res) => {
 });
 
 /* Teacher progress and grading */
+const liveStreams = new Map();
+function emitLiveEvent(key, eventName = "refresh") {
+  const clients = liveStreams.get(key);
+  if (!clients) return;
+  for (const response of clients) {
+    try { response.write("event: " + eventName + "\ndata: {}\n\n"); } catch {}
+  }
+}
+function addLiveClient(key, response) {
+  if (!liveStreams.has(key)) liveStreams.set(key, new Set());
+  liveStreams.get(key).add(response);
+  response.on("close", () => {
+    const clients = liveStreams.get(key);
+    if (!clients) return;
+    clients.delete(response);
+    if (!clients.size) liveStreams.delete(key);
+  });
+}
+async function authenticateStream(req, res) {
+  try {
+    const jwt = String(req.query.token || "");
+    if (!jwt) { res.status(401).end(); return null; }
+    const userClient = new sdk.Client().setEndpoint(ENDPOINT).setProject(PROJECT_ID).setJWT(jwt);
+    const authUser = await new sdk.Account(userClient).get();
+    const profile = await getProfile(authUser);
+    if (!profile || profile.status !== "active" || profile.role !== "teacher") {
+      res.status(403).end(); return null;
+    }
+    return { authUser, profile };
+  } catch {
+    res.status(401).end(); return null;
+  }
+}
+function beginEventStream(req, res, key) {
+  res.status(200);
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  res.flushHeaders?.();
+  res.write("event: connected\ndata: {}\n\n");
+  addLiveClient(key, res);
+}
+app.get("/api/teacher/live-stream/:assignmentId", async (req, res) => {
+  const auth = await authenticateStream(req, res);
+  if (!auth) return;
+  try {
+    await getRow("assignments", req.params.assignmentId);
+    beginEventStream(req, res, "assignment:" + req.params.assignmentId);
+  } catch { res.status(404).end(); }
+});
+app.get("/api/teacher/class-stream/:classId", async (req, res) => {
+  const auth = await authenticateStream(req, res);
+  if (!auth) return;
+  try {
+    await getRow("classes", req.params.classId);
+    beginEventStream(req, res, "class:" + req.params.classId);
+  } catch { res.status(404).end(); }
+});
+async function notifyAssignmentLive(assignmentId) {
+  emitLiveEvent("assignment:" + assignmentId);
+  try {
+    const assignment = await getRow("assignments", assignmentId);
+    emitLiveEvent("class:" + assignment.classId);
+  } catch {}
+}
+
 app.get("/api/teacher/live/:assignmentId", authenticate, requireRole("teacher"), async (req, res) => {
   try {
     const assignment = await getRow("assignments", req.params.assignmentId);
@@ -1249,6 +1325,7 @@ app.post("/api/grading/:submissionId", authenticate, requireRole("teacher"), asy
       passedAt: result === "passed" ? new Date().toISOString() : null
     });
     if (result === "passed") await unlockNextAssignment(assignment);
+    await notifyAssignmentLive(assignment.$id);
 
     res.json({ success: true, submission: updated });
   } catch (error) {
