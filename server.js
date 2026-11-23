@@ -628,14 +628,18 @@ app.post("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res
   }
 });
 
-app.get("/api/me", authenticate, (req, res) => {
+app.get("/api/me",authenticate,async(req,res)=>{
+  const allowlist=String(process.env.PLATFORM_ADMIN_EMAILS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
+  const school=await getRow("schools",req.profile.schoolId).catch(()=>null);
   res.json({
-    success: true,
-    user: {
-      id: req.authUser.$id,
-      email: req.authUser.email,
-      name: req.profile.displayName,
-      role: req.profile.role
+    success:true,
+    user:{
+      id:req.authUser.$id,
+      email:req.authUser.email,
+      name:req.profile.displayName,
+      role:req.profile.role,
+      schoolName:school?.name||"",
+      platformAdmin:allowlist.includes(String(req.authUser.email||"").toLowerCase())
     }
   });
 });
