@@ -2,68 +2,39 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f7f9fc">
-  <meta name="description" content="デジタル問題演習 - 教材配信・ブラウザ演習・提出・採点を一元管理">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
   <title>ログイン | デジタル問題演習</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/login.css">
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f5f7fb;color:#172033;font-family:Arial,"Noto Sans JP",sans-serif;display:grid;place-items:center;padding:24px}
+    .card{width:min(100%,420px);background:#fff;border:1px solid #e5e9f0;border-radius:14px;padding:38px;box-shadow:0 12px 36px rgba(20,35,60,.06)}
+    .brand{font-size:19px;font-weight:700;letter-spacing:.02em;margin-bottom:34px;color:#2457c5}
+    h1{font-size:25px;margin:0 0 8px} .sub{font-size:13px;color:#687386;margin:0 0 30px}
+    label{display:block;font-size:13px;font-weight:600;margin:18px 0 8px}
+    input{width:100%;height:48px;border:1px solid #ccd4e0;border-radius:8px;padding:0 13px;font-size:15px;outline:none}
+    input:focus{border-color:#3267d6;box-shadow:0 0 0 3px #3267d61c}
+    button{width:100%;height:48px;margin-top:25px;border:0;border-radius:8px;background:#285cc8;color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+    button:disabled{opacity:.6;cursor:wait}.message{min-height:22px;margin-top:14px;font-size:13px;color:#c03939;line-height:1.6}
+    .help{font-size:12px;color:#7b8493;text-align:center;margin-top:26px}
+    footer{font-size:11px;color:#9aa3b1;text-align:center;margin-top:26px}
+    @media(max-width:480px){.card{padding:28px 22px}}
+  </style>
 </head>
-<body class="login-page">
-  <main class="login-shell">
-    <section class="brand-panel" aria-label="サービス紹介">
-      <a class="brand-lockup" href="/login.html" aria-label="デジタル問題演習 ホーム">
-        <span class="brand-mark"><span></span><span></span><span></span></span>
-        <span class="brand-name">デジタル問題演習</span>
-      </a>
-      <div class="brand-copy">
-        <p class="overline">DIGITAL LEARNING PLATFORM</p>
-        <h1>学びを、<br><em>ひとつの場所に。</em></h1>
-        <p class="brand-description">教材の配信から、ブラウザでの演習、提出、添削まで。毎日の学習をシンプルにつなぎます。</p>
-      </div>
-      <div class="preview-card" aria-hidden="true">
-        <div class="preview-top"><span class="preview-dot"></span><span>LEARNING WORKSPACE</span><span class="preview-status">ONLINE</span></div>
-        <div class="preview-content">
-          <div class="preview-sidebar"><i></i><i></i><i></i><i></i></div>
-          <div class="preview-paper">
-            <div class="paper-line short"></div><div class="paper-line"></div><div class="paper-line medium"></div>
-            <div class="paper-question"><b>問 1</b><span></span><span></span></div>
-            <div class="paper-answer"><svg viewBox="0 0 220 64" role="img"><path d="M8 38 C26 8 38 60 58 28 S92 14 104 40 S130 54 144 23 S173 8 184 37 S203 48 214 19" fill="none" stroke="#5279db" stroke-width="3.2" stroke-linecap="round"/></svg></div>
-            <div class="paper-line medium"></div><div class="paper-line short"></div>
-          </div>
-        </div>
-        <div class="preview-bottom"><span>学習の進捗</span><div class="progress-track"><i></i></div><b>72%</b></div>
-      </div>
-      <p class="brand-footnote">学習する人と、支える人をつなぐ。</p>
-    </section>
-
-    <section class="form-panel">
-      <div class="form-wrap">
-        <div class="mobile-brand"><span class="brand-mark"><span></span><span></span><span></span></span><b>デジタル問題演習</b></div>
-        <div class="form-heading">
-          <p class="form-kicker">WELCOME BACK</p>
-          <h2>おかえりなさい</h2>
-          <p>アカウント情報を入力してログインしてください。</p>
-        </div>
-        <form id="login-form" novalidate>
-          <div class="input-group">
-            <label for="email">メールアドレス</label>
-            <div class="input-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="m4.5 7 7.5 6 7.5-6"></path></svg><input id="email" name="email" type="email" placeholder="name@example.com" autocomplete="username" required></div>
-          </div>
-          <div class="input-group">
-            <div class="label-row"><label for="password">パスワード</label><button type="button" class="text-button" id="forgot-button">パスワードをお忘れですか？</button></div>
-            <div class="input-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="10" rx="2.5"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><input id="password" name="password" type="password" placeholder="パスワードを入力" autocomplete="current-password" required><button type="button" class="eye-button" id="toggle-password" aria-label="パスワードを表示"><svg viewBox="0 0 24 24"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg></button></div>
-          </div>
-          <div id="login-message" class="form-message" role="status" aria-live="polite"></div>
-          <button id="login-button" class="submit-button" type="submit"><span>ログイン</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
-        </form>
-        <div class="security-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 19 6v5c0 4.7-2.8 8-7 10-4.2-2-7-5.3-7-10V6l7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg><span>登録済みアカウント専用の安全なログインです。</span></div>
-        <p class="account-help">アカウントの新規発行・変更は、所属先の管理者または先生にお問い合わせください。</p>
-        <div class="form-footer"><span>© 2026 デジタル問題演習</span><span>SECURE ACCESS</span></div>
-      </div>
-    </section>
+<body>
+  <main class="card">
+    <div class="brand">デジタル問題演習</div>
+    <h1>ログイン</h1>
+    <p class="sub">メールアドレスとパスワードを入力してください。</p>
+    <form id="login-form">
+      <label for="email">メールアドレス</label>
+      <input id="email" name="email" type="email" autocomplete="username" placeholder="name@example.com" required>
+      <label for="password">パスワード</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" placeholder="パスワード" required>
+      <button id="login-button" type="submit">ログイン</button>
+      <div id="login-message" class="message" role="alert"></div>
+    </form>
+    <p class="help">アカウントの発行・変更は先生にお問い合わせください。</p>
+    <footer>© 2026 デジタル問題演習. All Rights Reserved.</footer>
   </main>
   <script type="module" src="/login.js"></script>
 </body>
