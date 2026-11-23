@@ -206,6 +206,16 @@ const schemas = {
       ["body", "text", null, true]
     ]
   },
+  audit_logs: {
+    name: "Audit Logs",
+    columns: [
+      ["action", "varchar", 255, true],
+      ["actorId", "varchar", 36, true],
+      ["httpMethod", "varchar", 12, true],
+      ["route", "varchar", 512, true],
+      ["statusCode", "integer", null, true]
+    ]
+  },
   system_settings: {
     name: "System Settings",
     columns: [
@@ -427,6 +437,18 @@ async function authenticate(req, res, next) {
     req.authUser=authUser;
     req.profile=profile;
     if(!profile.schoolId)return res.status(403).json({error:"所属校舎が設定されていません。管理者にお問い合わせください。"});
+    res.on("finish",()=>{
+      if(["GET","HEAD","OPTIONS"].includes(req.method))return;
+      tenantContext.run(profile.schoolId,()=>{
+        createRow("audit_logs",{
+          action:req.method+" "+req.path,
+          actorId:authUser.$id,
+          httpMethod:req.method,
+          route:String(req.path).slice(0,512),
+          statusCode:res.statusCode
+        }).catch(error=>console.error("Audit log write failed:",error.message));
+      });
+    });
     tenantContext.run(profile.schoolId,()=>next());
   } catch (error) {
     console.error("Authentication failed:", error.message);
@@ -532,6 +554,51 @@ async function getSystemSetting(key) {
 app.get("/api/health",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
   res.json({success:true,service:"digital-learning-system",status:"ok",timestamp:new Date().toISOString()});
+});
+
+app.get("/api/school",authenticate,requireRole("teacher"),async(req,res)=>{
+  try{
+    const school=await getRow("schools",req.profile.schoolId);
+    res.json({success:true,school:{id:school.$id,name:school.name,status:school.status,plan:school.plan||"standard"}});
+  }catch(error){res.status(404).json({error:"所属校舎情報を取得できませんでした。"});}
+});
+app.patch("/api/school",authenticate,requireRole("teacher"),async(req,res)=>{
+  const name=String(req.body.name||"").trim();
+  if(!name||name.length>255)return res.status(400).json({error:"校舎名は1〜255文字で入力してください。"});
+  try{
+    const school=await getRow("schools",req.profile.schoolId);
+    const updated=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id,data:{name}});
+    res.json({success:true,school:{id:updated.$id,name:updated.name,status:updated.status,plan:updated.plan||"standard"}});
+  }catch(error){res.status(500).json({error:"校舎情報を更新できませんでした。"});}
+});
+
+function requirePlatformAdmin(req,res,next){
+  const allowlist=String(process.env.PLATFORM_ADMIN_EMAILS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
+  if(!allowlist.includes(String(req.authUser?.email||"").toLowerCase()))return res.status(403).json({error:"プラットフォーム管理者のみ実行できます。"});
+  next();
+}
+app.post("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res)=>{
+  const schoolName=String(req.body.schoolName||"").trim();
+  const email=String(req.body.email||"").trim().toLowerCase();
+  const name=String(req.body.name||"").trim();
+  const password=String(req.body.password||"");
+  if(!schoolName||schoolName.length>255||!email||!name||password.length<12){
+    return res.status(400).json({error:"学校名・管理者名・メールアドレス・12文字以上の初期パスワードを指定してください。"});
+  }
+  let school=null,authUser=null;
+  try{
+    school=await tablesDB.createRow({databaseId:DATABASE_ID,tableId:"schools",rowId:ID.unique(),data:{name:schoolName,status:"active",createdBy:req.authUser.$id,plan:"standard"},permissions:[]});
+    authUser=await users.create({userId:ID.unique(),email,password,name});
+    const profile=await tenantContext.run(school.$id,()=>createRow("users",{
+      authUserId:authUser.$id,email,displayName:name,role:"teacher",status:"active"
+    }));
+    res.status(201).json({success:true,school:{id:school.$id,name:school.name},owner:{id:profile.authUserId,email:profile.email,name:profile.displayName}});
+  }catch(error){
+    if(authUser)await users.delete({userId:authUser.$id}).catch(()=>{});
+    if(school)await tablesDB.deleteRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id}).catch(()=>{});
+    const message=error.code===409?"このメールアドレスは既に登録されています。":"学校アカウントを作成できませんでした。";
+    res.status(400).json({error:message});
+  }
 });
 
 app.get("/api/me", authenticate, (req, res) => {
