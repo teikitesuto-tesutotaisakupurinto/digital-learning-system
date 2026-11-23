@@ -149,6 +149,18 @@ const schemas = {
       ["teacherData", "longtext", null, false]
     ]
   },
+  study_sessions: {
+    name: "Study Sessions",
+    columns: [
+      ["assignmentId", "varchar", 36, true],
+      ["submissionId", "varchar", 36, true],
+      ["studentId", "varchar", 36, true],
+      ["startedAt", "datetime", null, true],
+      ["lastHeartbeatAt", "datetime", null, true],
+      ["durationSeconds", "integer", null, true],
+      ["endedAt", "datetime", null, false]
+    ]
+  },
   grading_records: {
     name: "Grading Records",
     columns: [
@@ -990,6 +1002,65 @@ app.get("/api/workspace/:assignmentId", authenticate, async (req, res) => {
   }
 });
 
+/* Study time tracking */
+app.post("/api/study-sessions/start", authenticate, requireRole("student"), async (req, res) => {
+  try {
+    const assignment = await getRow("assignments", String(req.body.assignmentId || ""));
+    const submission = await getRow("submissions", String(req.body.submissionId || ""));
+    if (assignment.studentId !== req.authUser.$id || submission.studentId !== req.authUser.$id ||
+        submission.assignmentId !== assignment.$id) {
+      return res.status(403).json({ error: "この学習記録を開始する権限がありません。" });
+    }
+    if (["submitted", "passed"].includes(assignment.status)) {
+      return res.status(409).json({ error: "提出済みの教材では学習時間を記録できません。" });
+    }
+    const now = new Date().toISOString();
+    const session = await createRow("study_sessions", {
+      assignmentId: assignment.$id,
+      submissionId: submission.$id,
+      studentId: req.authUser.$id,
+      startedAt: now,
+      lastHeartbeatAt: now,
+      durationSeconds: 0,
+      endedAt: null
+    });
+    res.status(201).json({ success: true, session });
+  } catch (error) {
+    console.error("Study session start failed:", error);
+    res.status(500).json({ error: "学習時間の記録を開始できませんでした。" });
+  }
+});
+
+async function updateStudySession(req, res, endSession) {
+  try {
+    const session = await getRow("study_sessions", req.params.id);
+    if (session.studentId !== req.authUser.$id || req.profile.role !== "student") {
+      return res.status(403).json({ error: "この学習記録を更新する権限がありません。" });
+    }
+    if (session.endedAt) return res.json({ success: true, session });
+    const now = Date.now();
+    const last = new Date(session.lastHeartbeatAt).getTime();
+    const elapsed = Math.max(0, Math.min(90, Math.floor((now - last) / 1000)));
+    const data = {
+      durationSeconds: Math.max(0, Number(session.durationSeconds) || 0) + elapsed,
+      lastHeartbeatAt: new Date(now).toISOString()
+    };
+    if (endSession) data.endedAt = new Date(now).toISOString();
+    const updated = await updateRow("study_sessions", session.$id, data);
+    res.json({ success: true, session: updated });
+  } catch (error) {
+    console.error("Study session update failed:", error);
+    res.status(500).json({ error: "学習時間を保存できませんでした。" });
+  }
+}
+
+app.post("/api/study-sessions/:id/heartbeat", authenticate, (req, res) =>
+  updateStudySession(req, res, false)
+);
+app.post("/api/study-sessions/:id/stop", authenticate, (req, res) =>
+  updateStudySession(req, res, true)
+);
+
 app.put("/api/submissions/:id/pages/:pageNo", authenticate, async (req, res) => {
   try {
     const submission = await getRow("submissions", req.params.id);
@@ -1056,7 +1127,13 @@ app.get("/api/classes/:id/progress", authenticate, requireRole("teacher"), async
       const studentAssignments = assignments.rows.filter(a => a.studentId === enrollment.studentId);
       const results = await Promise.all(studentAssignments.map(async assignment => {
         const submission = await findLatestSubmission(assignment.$id, assignment.studentId);
-        return { ...assignment, submission };
+        const sessions = await listRows("study_sessions", [
+          Query.equal("assignmentId", assignment.$id),
+          Query.equal("studentId", assignment.studentId)
+        ], 1000).catch(() => ({ rows: [] }));
+        const studySeconds = sessions.rows.reduce((sum, session) =>
+          sum + Math.max(0, Number(session.durationSeconds) || 0), 0);
+        return { ...assignment, submission, studySeconds };
       }));
       return {
         studentId: enrollment.studentId,
