@@ -673,6 +673,17 @@ app.patch("/api/folders/:id", authenticate, requireRole("teacher"), async (req, 
       }
     };
     await refresh(current.$id);
+    if (req.body.isTrashed !== undefined) {
+      const affectedMaterials = await listRows("materials", [], 500);
+      for (const material of affectedMaterials.rows) {
+        if (material.folderId && descendants.has(material.folderId)) {
+          await updateRow("materials", material.$id, {
+            isTrashed: Boolean(req.body.isTrashed),
+            trashedAt: req.body.isTrashed ? new Date().toISOString() : null
+          });
+        }
+      }
+    }
     res.json({ success: true, folder: updated });
   } catch (error) {
     console.error("Folder update failed:", error);
