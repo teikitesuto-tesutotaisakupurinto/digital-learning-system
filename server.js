@@ -948,7 +948,18 @@ app.get("/api/assignments", authenticate, async (req, res) => {
       const assignments = await Promise.all(result.rows.map(async item => {
         const material = await getRow("materials", item.materialId).catch(() => null);
         const distribution = await getRow("distributions", item.distributionId).catch(() => null);
-        return { ...item, material, distribution };
+        const sessions = await listRows("study_sessions", [
+          Query.equal("assignmentId", item.$id),
+          Query.equal("studentId", req.authUser.$id)
+        ], 1000).catch(() => ({ rows: [] }));
+        const studySeconds = sessions.rows.reduce((sum, session) =>
+          sum + Math.max(0, Number(session.durationSeconds) || 0), 0);
+        const submission = await findLatestSubmission(item.$id, req.authUser.$id);
+        const grades = submission ? await listRows("grading_records", [
+          Query.equal("submissionId", submission.$id),
+          Query.orderDesc("$createdAt")
+        ], 1).catch(() => ({ rows: [] })) : { rows: [] };
+        return { ...item, material, distribution, studySeconds, latestGrade: grades.rows[0] || null };
       }));
       return res.json({ success: true, assignments });
     }
