@@ -1256,13 +1256,14 @@ app.get("/api/classes/:id/progress", authenticate, requireRole("teacher"), async
       const studentAssignments = assignments.rows.filter(a => a.studentId === enrollment.studentId);
       const results = await Promise.all(studentAssignments.map(async assignment => {
         const submission = await findLatestSubmission(assignment.$id, assignment.studentId);
+        const material = await getRow("materials", assignment.materialId).catch(() => null);
         const sessions = await listRows("study_sessions", [
           Query.equal("assignmentId", assignment.$id),
           Query.equal("studentId", assignment.studentId)
         ], 1000).catch(() => ({ rows: [] }));
         const studySeconds = sessions.rows.reduce((sum, session) =>
           sum + Math.max(0, Number(session.durationSeconds) || 0), 0);
-        return { ...assignment, submission, studySeconds };
+        return { ...assignment, materialTitle: material?.title || "教材", submission, studySeconds };
       }));
       return {
         studentId: enrollment.studentId,
