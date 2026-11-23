@@ -8,6 +8,44 @@ const studentLinks=[["学習ホーム","/student/dashboard.html"]];
 const path=location.pathname;
 let cachedJwt="",cachedJwtUntil=0,jwtRequest=null;async function token(){if(cachedJwt&&Date.now()<cachedJwtUntil)return cachedJwt;if(jwtRequest)return jwtRequest;jwtRequest=account.createJWT().then(t=>{cachedJwt=t.jwt;cachedJwtUntil=Date.now()+9*60*1000;return cachedJwt}).finally(()=>{jwtRequest=null});return jwtRequest}
 async function api(url,options={}){const jwt=await token();const headers={Authorization:"Bearer "+jwt,...(options.headers||{})};if(options.body&&!(options.body instanceof FormData))headers["Content-Type"]="application/json";const r=await fetch(url,{...options,headers});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||"処理に失敗しました。");return data}
+
+function connectClassStream(classId,onRefresh,onStatus){
+ let stopped=false,controller=null;
+ const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ const run=async()=>{
+  while(!stopped){
+   controller=new AbortController();
+   try{
+    const jwt=await token();
+    const response=await fetch("/api/teacher/class-stream/"+encodeURIComponent(classId),{
+     headers:{Authorization:"Bearer "+jwt},signal:controller.signal
+    });
+    if(!response.ok)throw new Error("リアルタイム接続に失敗しました。");
+    onStatus(true);
+    const reader=response.body.getReader(),decoder=new TextDecoder();
+    let buffer="";
+    while(!stopped){
+     const part=await reader.read();
+     if(part.done)break;
+     buffer+=decoder.decode(part.value,{stream:true});
+     let boundary;
+     while((boundary=buffer.search(/\\r?\\n\\r?\\n/))>=0){
+      const block=buffer.slice(0,boundary);
+      buffer=buffer.slice(boundary+ (buffer.startsWith("\\r\\n",boundary)?4:2));
+      const eventLine=block.split(/\\r?\\n/).find(line=>line.startsWith("event:"));
+      if(eventLine&&eventLine.slice(6).trim()==="refresh")onRefresh();
+     }
+    }
+   }catch(error){
+    if(stopped||error.name==="AbortError")break;
+    onStatus(false);
+    await wait(1800);
+   }
+  }
+ };
+ run();
+ return {close(){stopped=true;controller?.abort()}};
+}
 function notice(msg,ok=false){const el=$("#notice");if(el){el.textContent=msg;el.className="message "+(ok?"success":"error")}}
 function shell(title,links){
  const home=links===teacherLinks?"/teacher/dashboard.html":"/student/dashboard.html";
@@ -241,14 +279,13 @@ async function progress(){
   const connect=async()=>{
    if(classStream){classStream.close();classStream=null}
    const classId=$("#class-select").value;if(!classId)return;
-   const jwt=await token();classStream=new EventSource("/api/teacher/class-stream/"+encodeURIComponent(classId)+"?token="+encodeURIComponent(jwt));
-   await load();
-   classStream.addEventListener("refresh",()=>{
+   classStream=connectClassStream(classId,()=>{
     if(refreshTimer)clearTimeout(refreshTimer);
     refreshTimer=setTimeout(()=>load().catch(e=>notice(e.message)),250);
+   },connected=>{
+    $("#class-live-status").textContent=connected?"リアルタイム接続中 · クラス全員の状況を表示":"リアルタイム接続を再接続しています…";
    });
-   classStream.onerror=()=>{$("#class-live-status").textContent="リアルタイム接続を再接続しています…"};
-   classStream.onopen=()=>{$("#class-live-status").textContent="リアルタイム接続中 · クラス全員の状況を表示"};
+   await load();
   };
   $("#class-select").onchange=()=>connect().catch(e=>notice(e.message));
   if(cr.classes.length)await connect();else $("#progress-list").textContent="先にクラスを作成してください。";
