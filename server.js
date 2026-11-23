@@ -395,6 +395,8 @@ async function ensureDefaultSchool() {
       data:{name:String(process.env.SCHOOL_NAME||"導入校").trim().slice(0,255),status:"active",createdBy:"system",plan:"standard"},
       permissions:[]
     });
+  } else if(process.env.SCHOOL_NAME && school.name==="導入校") {
+    school=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id,data:{name:String(process.env.SCHOOL_NAME).trim().slice(0,255)}});
   }
   DEFAULT_SCHOOL_ID=school.$id;
   for(const tableId of TENANT_TABLES) {
