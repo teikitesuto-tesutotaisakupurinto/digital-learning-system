@@ -76,7 +76,10 @@ const schemas = {
       ["name", "varchar", 255, true],
       ["parentId", "varchar", 36, false],
       ["path", "text", null, false],
-      ["createdBy", "varchar", 36, true]
+      ["createdBy", "varchar", 36, true],
+      ["isStarred", "boolean", null, false],
+      ["isTrashed", "boolean", null, false],
+      ["trashedAt", "datetime", null, false]
     ]
   },
   materials: {
@@ -88,7 +91,10 @@ const schemas = {
       ["storageFileId", "varchar", 36, true],
       ["answerFileId", "varchar", 36, false],
       ["fileName", "varchar", 255, true],
-      ["createdBy", "varchar", 36, true]
+      ["createdBy", "varchar", 36, true],
+      ["isStarred", "boolean", null, false],
+      ["isTrashed", "boolean", null, false],
+      ["trashedAt", "datetime", null, false]
     ]
   },
   distributions: {
@@ -606,7 +612,10 @@ app.post("/api/folders", authenticate, requireRole("teacher"), async (req, res) 
       name,
       parentId,
       path: parent ? [parent.path || parent.name, name].filter(Boolean).join("/") : name,
-      createdBy: req.authUser.$id
+      createdBy: req.authUser.$id,
+      isStarred: false,
+      isTrashed: false,
+      trashedAt: null
     });
     res.status(201).json({ success: true, folder });
   } catch (error) {
@@ -639,14 +648,26 @@ app.patch("/api/folders/:id", authenticate, requireRole("teacher"), async (req, 
     const parent = nextParentId ? folders.find(x => x.$id === nextParentId) : null;
     if (nextParentId && !parent) return res.status(404).json({ error: "移動先フォルダが見つかりません。" });
     const nextPath = [parent ? (parent.path || parent.name) : "", nextName].filter(Boolean).join("/");
-    const updated = await updateRow("folders", current.$id, { name: nextName, parentId: nextParentId, path: nextPath });
+    const folderData = { name: nextName, parentId: nextParentId, path: nextPath };
+    if (req.body.isStarred !== undefined) folderData.isStarred = Boolean(req.body.isStarred);
+    if (req.body.isTrashed !== undefined) {
+      folderData.isTrashed = Boolean(req.body.isTrashed);
+      folderData.trashedAt = folderData.isTrashed ? new Date().toISOString() : null;
+    }
+    const updated = await updateRow("folders", current.$id, folderData);
     const byId = new Map(folders.map(x => [x.$id, x]));
     byId.set(current.$id, updated);
     const refresh = async folderId => {
       const parentFolder = byId.get(folderId);
       for (const child of folders.filter(x => x.parentId === folderId)) {
         const childPath = [parentFolder.path, child.name].filter(Boolean).join("/");
-        const childUpdated = await updateRow("folders", child.$id, { path: childPath });
+        const childData = { path: childPath };
+        if (req.body.isTrashed !== undefined) {
+          childData.isTrashed = Boolean(req.body.isTrashed);
+          childData.trashedAt = childData.isTrashed ? new Date().toISOString() : null;
+        }
+        if (req.body.isStarred !== undefined) childData.isStarred = Boolean(req.body.isStarred);
+        const childUpdated = await updateRow("folders", child.$id, childData);
         byId.set(child.$id, childUpdated);
         await refresh(child.$id);
       }
@@ -673,6 +694,11 @@ app.patch("/api/materials/:id", authenticate, requireRole("teacher"), async (req
       const folderId = String(req.body.folderId || "").trim() || null;
       if (folderId) await getRow("folders", folderId);
       data.folderId = folderId;
+    }
+    if (req.body.isStarred !== undefined) data.isStarred = Boolean(req.body.isStarred);
+    if (req.body.isTrashed !== undefined) {
+      data.isTrashed = Boolean(req.body.isTrashed);
+      data.trashedAt = data.isTrashed ? new Date().toISOString() : null;
     }
     const updated = await updateRow("materials", material.$id, data);
     res.json({ success: true, material: updated });
@@ -729,7 +755,10 @@ app.post("/api/materials", authenticate, requireRole("teacher"), upload.fields([
       storageFileId: stored.$id,
       answerFileId: storedAnswer ? storedAnswer.$id : null,
       fileName: file.originalname,
-      createdBy: req.authUser.$id
+      createdBy: req.authUser.$id,
+      isStarred: false,
+      isTrashed: false,
+      trashedAt: null
     });
     res.status(201).json({ success: true, material });
   } catch (error) {
