@@ -29,10 +29,10 @@ function connectClassStream(classId,onRefresh,onStatus){
      if(part.done)break;
      buffer+=decoder.decode(part.value,{stream:true});
      let boundary;
-     while((boundary=buffer.search(/\\r?\\n\\r?\\n/))>=0){
+     while((boundary=buffer.search(/\r?\n\r?\n/))>=0){
       const block=buffer.slice(0,boundary);
-      buffer=buffer.slice(boundary+ (buffer.startsWith("\\r\\n",boundary)?4:2));
-      const eventLine=block.split(/\\r?\\n/).find(line=>line.startsWith("event:"));
+      buffer=buffer.slice(boundary+(buffer.startsWith("\r\n",boundary)?4:2));
+      const eventLine=block.split(/\r?\n/).find(line=>line.startsWith("event:"));
       if(eventLine&&eventLine.slice(6).trim()==="refresh")onRefresh();
      }
     }
