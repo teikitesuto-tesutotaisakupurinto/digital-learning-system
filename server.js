@@ -234,6 +234,52 @@ for (const tableId of TENANT_TABLES) {
   }
 }
 
+const indexSpecs = {
+  users: [["tenant_auth",["schoolId","authUserId"]],["tenant_role_status",["schoolId","role","status"]]],
+  classes: [["tenant_status",["schoolId","status"]]],
+  enrollments: [["tenant_class_status",["schoolId","classId","status"]],["tenant_student_status",["schoolId","studentId","status"]]],
+  folders: [["tenant_creator",["schoolId","createdBy"]],["tenant_parent",["schoolId","parentId"]]],
+  materials: [["tenant_trashed",["schoolId","isTrashed"]],["tenant_folder",["schoolId","folderId"]]],
+  distributions: [["tenant_creator",["schoolId","createdBy"]]],
+  distribution_items: [["tenant_distribution",["schoolId","distributionId"]]],
+  assignments: [["tenant_student",["schoolId","studentId"]],["tenant_student_status",["schoolId","studentId","status"]],["tenant_student_material",["schoolId","studentId","materialId"]],["tenant_class",["schoolId","classId"]],["tenant_distribution_student",["schoolId","distributionId","studentId"]]],
+  submissions: [["tenant_assignment_student",["schoolId","assignmentId","studentId"]]],
+  submission_pages: [["tenant_submission_page",["schoolId","submissionId","pageNo"]]],
+  study_sessions: [["tenant_assignment_student",["schoolId","assignmentId","studentId"]]],
+  grading_records: [["tenant_submission",["schoolId","submissionId"]]],
+  comments: [["tenant_submission",["schoolId","submissionId"]]],
+  audit_logs: [["tenant_actor",["schoolId","actorId"]]],
+  system_settings: [["tenant_key",["schoolId","settingKey"]]]
+};
+
+async function ensureIndex(tableId,key,columns) {
+  try {
+    await tablesDB.getIndex({databaseId:DATABASE_ID,tableId,key});
+    return;
+  } catch(error) {
+    if(!isNotFound(error))throw error;
+  }
+  try {
+    await tablesDB.createIndex({
+      databaseId:DATABASE_ID,tableId,key,type:"key",columns,
+      orders:columns.map(()=>"ASC")
+    });
+  } catch(error) {
+    if(error.code!==409)throw error;
+  }
+  for(let attempt=0;attempt<60;attempt++) {
+    try {
+      const index=await tablesDB.getIndex({databaseId:DATABASE_ID,tableId,key});
+      if(index.status==="available")return;
+      if(index.status==="failed")throw new Error("Index creation failed: "+tableId+"."+key);
+    } catch(error) {
+      if(!isNotFound(error))throw error;
+    }
+    await sleep(500);
+  }
+  throw new Error("Timed out waiting for index "+tableId+"."+key);
+}
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function isNotFound(error) {
@@ -304,10 +350,9 @@ async function ensureSchema() {
       await sleep(700);
     }
 
-    for (const column of schema.columns) {
-      await ensureColumn(tableId, column);
-    }
-    console.log("Schema ready: " + tableId);
+    for(const column of schema.columns)await ensureColumn(tableId,column);
+    for(const [key,columns] of (indexSpecs[tableId]||[]))await ensureIndex(tableId,key,columns);
+    console.log("Schema and indexes ready: "+tableId);
   }
 }
 
