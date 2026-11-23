@@ -613,6 +613,34 @@ app.get("/api/me", authenticate, (req, res) => {
   });
 });
 
+app.get("/api/dashboard/summary",authenticate,requireRole("teacher"),async(req,res)=>{
+  try{
+    const [classes,materials,distributions,students]=await Promise.all([
+      listRows("classes",[Query.equal("status","active")],500),
+      listRows("materials",[],1000),
+      listRows("distributions",[],500),
+      listRows("users",[Query.equal("role","student"),Query.equal("status","active")],1000)
+    ]);
+    res.json({
+      success:true,
+      classes:classes.rows,
+      materialCount:materials.rows.length,
+      distributions:distributions.rows,
+      students:students.rows
+    });
+  }catch(error){console.error("Dashboard summary failed:",error);res.status(500).json({error:"ダッシュボード情報を取得できませんでした。"});}
+});
+
+app.get("/api/material-library",authenticate,requireRole("teacher"),async(req,res)=>{
+  try{
+    const [folders,materials]=await Promise.all([
+      listRows("folders",[],1000),
+      listRows("materials",[],1000)
+    ]);
+    res.json({success:true,folders:folders.rows,materials:materials.rows});
+  }catch(error){console.error("Material library load failed:",error);res.status(500).json({error:"教材ライブラリを取得できませんでした。"});}
+});
+
 /* Users */
 app.get("/api/users", authenticate, requireRole("teacher"), async (req, res) => {
   try {
