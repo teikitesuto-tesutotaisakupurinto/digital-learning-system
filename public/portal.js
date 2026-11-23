@@ -14,7 +14,17 @@ function shell(title,links){
  const nav=links.map(x=>'<a class="'+(path===x[1]?'active':'')+'" href="'+x[1]+'"><span class="nav-mark" aria-hidden="true"></span><span>'+esc(x[0])+'</span></a>').join("");
  document.body.innerHTML='<header class="topbar"><div class="topbar-brand"><a class="brand-symbol" href="'+home+'" aria-label="ホーム">DL</a><a class="brand" href="'+home+'"><strong>デジタル問題演習</strong><small>DIGITAL LEARNING PLATFORM</small></a></div><div class="topbar-right"><span class="workspace-label">'+(links===teacherLinks?'TEACHER':'STUDENT')+'</span><span id="who" class="user-name"></span><details class="user-menu"><summary aria-label="アカウントメニュー"><span class="account-avatar">U</span><span>アカウント</span><span class="account-chevron">⌄</span></summary><div class="user-menu-panel"><button type="button" id="logout" class="menu-action">ログアウト</button></div></details></div></header><div class="layout"><nav class="sidebar"><div class="sidebar-caption">WORKSPACE</div>'+nav+'<div class="sidebar-spacer"></div><div class="sidebar-foot"><span class="sidebar-status"></span><span>システム稼働中</span></div></nav><main class="content"><div class="page-head"><div><div class="eyebrow">WORKSPACE / '+(links===teacherLinks?'TEACHER':'STUDENT')+'</div><h1>'+esc(title)+'</h1></div></div><div id="notice" class="message" role="status"></div><div id="view"></div></main></div><footer>© 2026 デジタル問題演習. All Rights Reserved.</footer>';
  $("#logout").onclick=async()=>{try{await account.deleteSession("current")}catch{}location.replace("/login.html")};
- api("/api/me").then(d=>{$("#who").textContent=d.user.name||d.user.email;const avatar=document.querySelector(".account-avatar");if(avatar)avatar.textContent=String(d.user.name||d.user.email||"U").trim().charAt(0).toUpperCase()}).catch(()=>location.replace("/login.html"));
+ api("/api/me").then(d=>{
+  $("#who").textContent=d.user.name||d.user.email;
+  const avatar=document.querySelector(".account-avatar");
+  if(avatar)avatar.textContent=String(d.user.name||d.user.email||"U").trim().charAt(0).toUpperCase();
+  const workspace=document.querySelector(".workspace-label");
+  if(workspace&&d.user.schoolName)workspace.textContent=d.user.schoolName+" / "+(d.user.role==="teacher"?"TEACHER":"STUDENT");
+  if(d.user.platformAdmin){
+   const link=document.createElement("a");link.href="/platform/schools.html";link.className="menu-action menu-link";link.textContent="学校・導入先管理";
+   $("#logout").before(link);
+  }
+ }).catch(()=>location.replace("/login.html"));
 }
 function pathForFolder(id,map){const result=[];let f=map.get(id);while(f){result.unshift(f);f=map.get(f.parentId)}return result}
 function folderDescendants(id,folders){const set=new Set([id]);let changed=true;while(changed){changed=false;for(const f of folders){if(f.parentId&&set.has(f.parentId)&&!set.has(f.$id)){set.add(f.$id);changed=true}}}return set}
