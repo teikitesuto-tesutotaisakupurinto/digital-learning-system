@@ -410,7 +410,7 @@ async function ensureDefaultSchool() {
   } else {
     const updates={};
     if(process.env.SCHOOL_NAME && school.name==="導入校")updates.name=String(process.env.SCHOOL_NAME).trim().slice(0,255);
-    if(!school.slug)updates.slug=normalizeSchoolSlug(process.env.SCHOOL_SLUG||"main");
+    if(!school.slug || (process.env.SCHOOL_SLUG && school.slug==="main"))updates.slug=normalizeSchoolSlug(process.env.SCHOOL_SLUG||"main");
     if(Object.keys(updates).length)school=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id,data:updates});
   }
   if(!isValidSchoolSlug(school.slug||""))throw new Error("SCHOOL_SLUG must be a valid URL slug (lowercase letters, numbers, hyphens).");
@@ -673,7 +673,7 @@ function requirePlatformAdmin(req,res,next){
 app.get("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res)=>{
   try{
     const result=await listRows("schools",[],500);
-    res.json({success:true,schools:result.rows.map(row=>({id:row.$id,name:row.name,status:row.status,plan:row.plan||"standard"}))});
+    res.json({success:true,schools:result.rows.map(row=>({id:row.$id,name:row.name,slug:row.slug,status:row.status,plan:row.plan||"standard"}))});
   }catch(error){res.status(500).json({error:"学校一覧を取得できませんでした。"});}
 });
 app.patch("/api/platform/schools/:id/status",authenticate,requirePlatformAdmin,async(req,res)=>{
