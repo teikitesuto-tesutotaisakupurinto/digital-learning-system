@@ -3,6 +3,7 @@
 const express = require("express");
 const path = require("path");
 const crypto = require("crypto");
+const { AsyncLocalStorage } = require("async_hooks");
 const multer = require("multer");
 const sdk = require("node-appwrite");
 const { InputFile } = require("node-appwrite/file");
@@ -44,6 +45,8 @@ const storage = new sdk.Storage(adminClient);
 const users = new sdk.Users(adminClient);
 const ID = sdk.ID;
 const Query = sdk.Query;
+const tenantContext = new AsyncLocalStorage();
+let DEFAULT_SCHOOL_ID = null;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -51,6 +54,15 @@ const upload = multer({
 });
 
 const schemas = {
+  schools: {
+    name: "Schools",
+    columns: [
+      ["name", "varchar", 255, true],
+      ["status", "enum", ["active", "suspended"], true],
+      ["createdBy", "varchar", 36, false],
+      ["plan", "varchar", 40, false]
+    ]
+  },
   users: {
     name: "Users",
     columns: [
@@ -203,6 +215,15 @@ const schemas = {
   }
 };
 
+// Every operational table is scoped to a school. schoolId is optional during
+// migration so existing installations can be upgraded without deleting rows.
+const TENANT_TABLES = new Set(Object.keys(schemas).filter(tableId => tableId !== "schools"));
+for (const tableId of TENANT_TABLES) {
+  if (!schemas[tableId].columns.some(column => column[0] === "schoolId")) {
+    schemas[tableId].columns.push(["schoolId", "varchar", 36, false]);
+  }
+}
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function isNotFound(error) {
@@ -281,34 +302,62 @@ async function ensureSchema() {
 }
 
 function listRows(tableId, queries = [], limit = 100) {
-  return tablesDB.listRows({
-    databaseId: DATABASE_ID,
-    tableId,
-    queries: [...queries, Query.limit(limit)]
-  });
+  const schoolId=tenantContext.getStore();
+  const scoped=TENANT_TABLES.has(tableId)&&schoolId
+    ? [...queries,Query.equal("schoolId",schoolId)]
+    : queries;
+  return tablesDB.listRows({databaseId:DATABASE_ID,tableId,queries:[...scoped,Query.limit(Math.min(1000,Math.max(1,limit)))]});
 }
 
-function getRow(tableId, rowId) {
-  return tablesDB.getRow({ databaseId: DATABASE_ID, tableId, rowId });
+async function getRow(tableId,rowId) {
+  const row=await tablesDB.getRow({databaseId:DATABASE_ID,tableId,rowId});
+  const schoolId=tenantContext.getStore();
+  if(TENANT_TABLES.has(tableId)&&schoolId&&row.schoolId!==schoolId) {
+    const error=new Error("Resource not found");error.code=404;throw error;
+  }
+  return row;
 }
 
-function createRow(tableId, data) {
-  return tablesDB.createRow({
-    databaseId: DATABASE_ID,
-    tableId,
-    rowId: ID.unique(),
-    data,
-    permissions: []
-  });
+function createRow(tableId,data) {
+  const schoolId=tenantContext.getStore()||DEFAULT_SCHOOL_ID;
+  const scopedData=TENANT_TABLES.has(tableId)&&schoolId?{...data,schoolId}:data;
+  return tablesDB.createRow({databaseId:DATABASE_ID,tableId,rowId:ID.unique(),data:scopedData,permissions:[]});
 }
 
-function updateRow(tableId, rowId, data) {
-  return tablesDB.updateRow({
-    databaseId: DATABASE_ID,
-    tableId,
-    rowId,
-    data
-  });
+async function updateRow(tableId,rowId,data) {
+  await getRow(tableId,rowId);
+  return tablesDB.updateRow({databaseId:DATABASE_ID,tableId,rowId,data});
+}
+
+// Create the initial school and attach all pre-existing records to it.
+// This migration is additive: no existing user, class, material or submission is deleted.
+async function ensureDefaultSchool() {
+  const found=await tablesDB.listRows({databaseId:DATABASE_ID,tableId:"schools",queries:[Query.limit(1)]});
+  let school=found.rows[0];
+  if(!school) {
+    school=await tablesDB.createRow({
+      databaseId:DATABASE_ID,tableId:"schools",rowId:ID.unique(),
+      data:{name:String(process.env.SCHOOL_NAME||"導入校").trim().slice(0,255),status:"active",createdBy:"system",plan:"standard"},
+      permissions:[]
+    });
+  }
+  DEFAULT_SCHOOL_ID=school.$id;
+  for(const tableId of TENANT_TABLES) {
+    let cursor=null;
+    for(let page=0;page<100;page++) {
+      const queries=[Query.limit(100)];
+      if(cursor)queries.push(Query.cursorAfter(cursor));
+      const result=await tablesDB.listRows({databaseId:DATABASE_ID,tableId,queries});
+      for(const row of result.rows) {
+        if(!row.schoolId) {
+          await tablesDB.updateRow({databaseId:DATABASE_ID,tableId,rowId:row.$id,data:{schoolId:DEFAULT_SCHOOL_ID}});
+        }
+      }
+      if(result.rows.length<100)break;
+      cursor=result.rows[result.rows.length-1].$id;
+    }
+  }
+  console.log("School tenant ready: "+DEFAULT_SCHOOL_ID);
 }
 
 // The first authenticated account is registered as the initial teacher.
@@ -319,8 +368,12 @@ let bootstrapTeacherPromise = null;
 async function getProfile(authUser) {
   const found = await listRows("users", [Query.equal("authUserId", authUser.$id)], 1);
   if (found.rows.length) {
-    const profile = found.rows[0];
-    if (profile.role === "admin") return updateRow("users", profile.$id, { role: "teacher" });
+    const profile=found.rows[0];
+    if(!profile.schoolId&&DEFAULT_SCHOOL_ID) {
+      const migrated=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"users",rowId:profile.$id,data:{schoolId:DEFAULT_SCHOOL_ID}});
+      return migrated;
+    }
+    if(profile.role==="admin")return updateRow("users",profile.$id,{role:"teacher"});
     return profile;
   }
 
@@ -333,7 +386,8 @@ async function getProfile(authUser) {
         email: authUser.email,
         displayName: authUser.name || authUser.email,
         role: "teacher",
-        status: "active"
+        status: "active",
+        schoolId: DEFAULT_SCHOOL_ID
       });
     })().finally(() => { bootstrapTeacherPromise = null; });
   }
@@ -370,9 +424,10 @@ async function authenticate(req, res, next) {
       return res.status(403).json({ error: "このアカウントは停止されています。" });
     }
 
-    req.authUser = authUser;
-    req.profile = profile;
-    next();
+    req.authUser=authUser;
+    req.profile=profile;
+    if(!profile.schoolId)return res.status(403).json({error:"所属校舎が設定されていません。管理者にお問い合わせください。"});
+    tenantContext.run(profile.schoolId,()=>next());
   } catch (error) {
     console.error("Authentication failed:", error.message);
     res.status(401).json({ error: "認証の有効期限が切れました。再ログインしてください。" });
@@ -390,9 +445,8 @@ function requireRole(...roles) {
 // Current single-organization boundary: each teacher owns their own classes and resources.
 // Separate school tenants and shared staff access require a schoolId-based migration before multi-school sales.
 async function teacherOwnsClass(req,classId) {
-  if(req.profile.role!=="teacher") return false;
-  const row=await getRow("classes",classId).catch(()=>null);
-  return Boolean(row && row.createdBy===req.authUser.$id);
+  if(req.profile.role!=="teacher")return false;
+  return Boolean(await getRow("classes",classId).catch(()=>null));
 }
 async function teacherOwnsAssignment(req,assignment) {
   return Boolean(assignment && await teacherOwnsClass(req,assignment.classId));
@@ -403,7 +457,8 @@ async function teacherOwnsSubmission(req,submission) {
   return teacherOwnsAssignment(req,assignment);
 }
 async function teacherOwnsMaterial(req,material) {
-  return Boolean(material && material.createdBy===req.authUser.$id);
+  if(req.profile.role!=="teacher"||!material)return false;
+  return Boolean(await getRow("materials",material.$id).catch(()=>null));
 }
 
 async function findMaterial(materialId) {
@@ -496,11 +551,8 @@ app.get("/api/users", authenticate, requireRole("teacher"), async (req, res) => 
   try {
     const role=req.query.role;
     if(role && !["teacher","student"].includes(role)) return res.status(400).json({error:"指定されたユーザー種別は無効です。"});
-    const classes=await listRows("classes",[Query.equal("createdBy",req.authUser.$id)],500);
-    const enrollments=await Promise.all(classes.rows.map(row=>listRows("enrollments",[Query.equal("classId",row.$id),Query.equal("status","active")],500)));
-    const studentIds=new Set(enrollments.flatMap(result=>result.rows.map(row=>row.studentId)));
     const result=await listRows("users",role?[Query.equal("role",role)]:[],500);
-    res.json({success:true,users:result.rows.filter(user=>user.role==="teacher"?user.authUserId===req.authUser.$id:studentIds.has(user.authUserId))});
+    res.json({success:true,users:result.rows});
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "ユーザー一覧を取得できませんでした。" });
@@ -568,7 +620,7 @@ app.get("/api/classes", authenticate, async (req, res) => {
       const classes = await Promise.all(ids.map(id => getRow("classes", id).catch(() => null)));
       return res.json({ success: true, classes: classes.filter(Boolean) });
     }
-    const result=await listRows("classes",[Query.equal("status","active"),Query.equal("createdBy",req.authUser.$id)],500);
+    const result=await listRows("classes",[Query.equal("status","active")],500);
     res.json({success:true,classes:result.rows});
   } catch (error) {
     console.error(error);
@@ -640,7 +692,7 @@ app.post("/api/classes/:id/students", authenticate, requireRole("teacher"), asyn
 
 /* Material folders */
 app.get("/api/folders", authenticate, requireRole("teacher"), async (req, res) => {
-  const rows=await listRows("folders",[Query.equal("createdBy",req.authUser.$id)],500);
+  const rows=await listRows("folders",[],500);
   res.json({success:true,folders:rows.rows});
 });
 
@@ -668,7 +720,7 @@ app.post("/api/folders", authenticate, requireRole("teacher"), async (req, res) 
 
 app.patch("/api/folders/:id", authenticate, requireRole("teacher"), async (req, res) => {
   try {
-    const folders=(await listRows("folders",[Query.equal("createdBy",req.authUser.$id)],1000)).rows;
+    const folders=(await listRows("folders",[],1000)).rows;
     const current=folders.find(x=>x.$id===req.params.id);
     if (!current) return res.status(404).json({ error: "フォルダが見つかりません。" });
     const nextName = String(req.body.name ?? current.name).trim();
@@ -717,7 +769,7 @@ app.patch("/api/folders/:id", authenticate, requireRole("teacher"), async (req, 
     };
     await refresh(current.$id);
     if (req.body.isTrashed !== undefined) {
-      const affectedMaterials=await listRows("materials",[Query.equal("createdBy",req.authUser.$id)],1000);
+      const affectedMaterials=await listRows("materials",[],1000);
       for (const material of affectedMaterials.rows) {
         if (material.folderId && descendants.has(material.folderId)) {
           await updateRow("materials", material.$id, {
@@ -763,7 +815,7 @@ app.patch("/api/materials/:id", authenticate, requireRole("teacher"), async (req
 });
 
 app.get("/api/materials", authenticate, requireRole("teacher"), async (req, res) => {
-  const result=await listRows("materials",[Query.equal("createdBy",req.authUser.$id)],500);
+  const result=await listRows("materials",[],500);
   res.json({success:true,materials:result.rows});
 });
 
@@ -862,7 +914,7 @@ app.get("/api/materials/:id/file", authenticate, async (req, res) => {
 
 /* Distribution and assignments */
 app.get("/api/distributions", authenticate, requireRole("teacher"), async (req, res) => {
-  const result=await listRows("distributions",[Query.equal("createdBy",req.authUser.$id)],500);
+  const result=await listRows("distributions",[],500);
   res.json({success:true,distributions:result.rows});
 });
 
@@ -879,8 +931,8 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
       return res.status(400).json({ error: "配信名・配信先・教材を指定してください。" });
     }
 
-    const allFolders=(await listRows("folders",[Query.equal("createdBy",req.authUser.$id)],1000)).rows;
-    const allMaterials=(await listRows("materials",[Query.equal("createdBy",req.authUser.$id),Query.equal("isTrashed",false)],1000)).rows;
+    const allFolders=(await listRows("folders",[],1000)).rows;
+    const allMaterials=(await listRows("materials",[Query.equal("isTrashed",false)],1000)).rows;
     const folderSet = new Set(selectedFolderIds);
     let changed = true;
     while (changed) {
@@ -913,7 +965,7 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
     for (const target of targets) {
       const classId = String(target.classId || "");
       const classRow=await getRow("classes",classId);
-      if(classRow.createdBy!==req.authUser.$id)return res.status(404).json({error:"配信先クラスが見つかりません。"});
+      if(!(await teacherOwnsClass(req,classId)))return res.status(404).json({error:"配信先クラスが見つかりません。"});
       const enrollments = await listRows("enrollments", [
         Query.equal("classId", classId),
         Query.equal("status", "active")
@@ -999,7 +1051,7 @@ app.get("/api/assignments", authenticate, async (req, res) => {
       }));
       return res.json({ success: true, assignments });
     }
-    const classes=await listRows("classes",[Query.equal("createdBy",req.authUser.$id)],500);
+    const classes=await listRows("classes",[],500);
     const grouped=await Promise.all(classes.rows.map(row=>listRows("assignments",[Query.equal("classId",row.$id)],1000)));
     res.json({success:true,assignments:grouped.flatMap(item=>item.rows)});
   } catch (error) {
@@ -1227,7 +1279,7 @@ app.get("/api/teacher/live-stream/:assignmentId",async(req,res)=>{
   try{
     const assignment=await getRow("assignments",req.params.assignmentId);
     const cls=await getRow("classes",assignment.classId);
-    if(cls.createdBy!==auth.authUser.$id)return res.status(404).end();
+    if(cls.schoolId!==auth.profile.schoolId)return res.status(404).end();
     beginEventStream(req,res,"assignment:"+req.params.assignmentId);
   }catch{res.status(404).end();}
 });
@@ -1236,7 +1288,7 @@ app.get("/api/teacher/class-stream/:classId",async(req,res)=>{
   if(!auth)return;
   try{
     const cls=await getRow("classes",req.params.classId);
-    if(cls.createdBy!==auth.authUser.$id)return res.status(404).end();
+    if(cls.schoolId!==auth.profile.schoolId)return res.status(404).end();
     beginEventStream(req,res,"class:"+req.params.classId);
   }catch{res.status(404).end();}
 });
@@ -1469,6 +1521,7 @@ app.use((error, req, res, next) => {
 async function start() {
   try {
     await ensureSchema();
+    await ensureDefaultSchool();
     app.listen(PORT, "0.0.0.0", () => {
       console.log("Digital Learning System running on port " + PORT);
       console.log("Appwrite database schema is ready.");
