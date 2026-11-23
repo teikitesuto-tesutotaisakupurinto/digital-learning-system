@@ -820,6 +820,7 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
     const scheduled = releaseAt && new Date(releaseAt).getTime() > Date.now();
     const status = scheduled ? "scheduled" : "published";
     const results = [];
+    const alreadyAssigned = new Set();
     let assignedStudents = 0;
 
     for (const target of targets) {
@@ -856,7 +857,11 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
           orderNo: index + 1
         });
       }
+      let classAssigned = 0;
       for (const enrollment of selectedEnrollments) {
+        if (alreadyAssigned.has(enrollment.studentId)) continue;
+        alreadyAssigned.add(enrollment.studentId);
+        classAssigned++;
         for (let index = 0; index < materials.length; index++) {
           await createRow("assignments", {
             distributionId: distribution.$id,
@@ -869,8 +874,8 @@ app.post("/api/distributions", authenticate, requireRole("teacher"), async (req,
           });
         }
       }
-      assignedStudents += selectedEnrollments.length;
-      results.push({ distributionId: distribution.$id, classId, className: classRow.name, students: selectedEnrollments.length });
+      assignedStudents += classAssigned;
+      results.push({ distributionId: distribution.$id, classId, className: classRow.name, students: classAssigned });
     }
 
     res.status(201).json({ success: true, distributions: results, assignedStudents, materialCount: materials.length });
