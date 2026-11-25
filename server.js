@@ -410,10 +410,11 @@ async function ensureDefaultSchool() {
   } else {
     const updates={};
     if(process.env.SCHOOL_NAME && school.name==="導入校")updates.name=String(process.env.SCHOOL_NAME).trim().slice(0,255);
-    if(!school.slug || (process.env.SCHOOL_SLUG && school.slug==="main"))updates.slug=normalizeSchoolSlug(process.env.SCHOOL_SLUG||"main");
+    if(!school.slug)updates.slug="main";
+    // This installation is a single-organization service; legacy suspended state is not used.
+    if(school.status!=="active")updates.status="active";
     if(Object.keys(updates).length)school=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id,data:updates});
   }
-  if(!isValidSchoolSlug(school.slug||""))throw new Error("SCHOOL_SLUG must be a valid URL slug (lowercase letters, numbers, hyphens).");
   DEFAULT_SCHOOL_ID=school.$id;
   for(const tableId of TENANT_TABLES) {
     let cursor=null;
@@ -486,33 +487,14 @@ async function authenticate(req, res, next) {
       .setJWT(token);
     const account = new sdk.Account(userClient);
     const authUser = await account.get();
-    const allowlist=String(process.env.PLATFORM_ADMIN_EMAILS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
-    const isPlatformAdmin=allowlist.includes(String(authUser.email||"").toLowerCase());
-    let profile;
-    if(isPlatformAdmin){
-      // Platform administrators are independent of any school's teacher/student roster.
-      profile={authUserId:authUser.$id,email:authUser.email,displayName:authUser.name||authUser.email,role:"platformAdmin",status:"active",schoolId:DEFAULT_SCHOOL_ID};
-    }else{
-      profile=await getProfile(authUser);
-      if(!profile){
-        return res.status(403).json({
-          error: "このアカウントには利用権限がありません。管理者に登録を依頼してください。"
-        });
-      }
-      if(profile.status!=="active")return res.status(403).json({error:"このアカウントは停止されています。"});
-      const expectedSchoolSlug=normalizeSchoolSlug(req.headers["x-school-slug"]);
-      if(expectedSchoolSlug){
-        const expectedSchool=await findSchoolBySlug(expectedSchoolSlug);
-        if(!expectedSchool||expectedSchool.status!=="active"||expectedSchool.$id!==profile.schoolId){
-          return res.status(403).json({error:"このログインURLは、登録された所属学校と一致しません。学校専用URLをご確認ください。"});
-        }
-      }
-      if(profile.schoolId){
-        const school=await getRow("schools",profile.schoolId).catch(()=>null);
-        if(!school||school.status!=="active")return res.status(403).json({error:"この学校のサービス利用は停止されています。"});
-      }
-      if(!profile.schoolId)return res.status(403).json({error:"所属校舎が設定されていません。管理者にお問い合わせください。"});
+    const profile=await getProfile(authUser);
+    if(!profile){
+      return res.status(403).json({
+        error: "このアカウントには利用権限がありません。管理者に登録を依頼してください。"
+      });
     }
+    if(profile.status!=="active")return res.status(403).json({error:"このアカウントは停止されています。"});
+    if(!profile.schoolId)return res.status(403).json({error:"所属校舎が設定されていません。管理者にお問い合わせください。"});
 
     req.authUser=authUser;
     req.profile=profile;
@@ -645,16 +627,7 @@ app.get("/api/health",(req,res)=>{
   res.json({success:true,service:"digital-learning-system",status:"ok",timestamp:new Date().toISOString()});
 });
 
-app.get("/api/public/schools/:slug",async(req,res)=>{
-  const slug=normalizeSchoolSlug(req.params.slug);
-  if(!isValidSchoolSlug(slug))return res.status(404).json({error:"学校が見つかりません。"});
-  try{
-    const school=await findSchoolBySlug(slug);
-    if(!school||school.status!=="active")return res.status(404).json({error:"学校が見つかりません。"});
-    res.setHeader("Cache-Control","public, max-age=60");
-    res.json({success:true,school:{name:school.name,slug:school.slug}});
-  }catch(error){res.status(500).json({error:"学校情報を取得できませんでした。"});}
-});
+
 
 app.get("/api/school",authenticate,requireRole("teacher"),async(req,res)=>{
   try{
@@ -672,55 +645,10 @@ app.patch("/api/school",authenticate,requireRole("teacher"),async(req,res)=>{
   }catch(error){res.status(500).json({error:"校舎情報を更新できませんでした。"});}
 });
 
-function requirePlatformAdmin(req,res,next){
-  const allowlist=String(process.env.PLATFORM_ADMIN_EMAILS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
-  if(!allowlist.includes(String(req.authUser?.email||"").toLowerCase()))return res.status(403).json({error:"プラットフォーム管理者のみ実行できます。"});
-  next();
-}
-app.get("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res)=>{
-  try{
-    const result=await listRows("schools",[],500);
-    res.json({success:true,schools:result.rows.map(row=>({id:row.$id,name:row.name,slug:row.slug,status:row.status,plan:row.plan||"standard"}))});
-  }catch(error){res.status(500).json({error:"学校一覧を取得できませんでした。"});}
-});
-app.patch("/api/platform/schools/:id/status",authenticate,requirePlatformAdmin,async(req,res)=>{
-  const status=String(req.body.status||"");
-  if(!["active","suspended"].includes(status))return res.status(400).json({error:"学校ステータスが不正です。"});
-  try{
-    const school=await getRow("schools",req.params.id);
-    const updated=await tablesDB.updateRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id,data:{status}});
-    res.json({success:true,school:{id:updated.$id,name:updated.name,status:updated.status}});
-  }catch(error){res.status(404).json({error:"学校が見つかりません。"});}
-});
-app.post("/api/platform/schools",authenticate,requirePlatformAdmin,async(req,res)=>{
-  const schoolName=String(req.body.schoolName||"").trim();
-  const slug=normalizeSchoolSlug(req.body.slug);
-  const email=String(req.body.email||"").trim().toLowerCase();
-  const name=String(req.body.name||"").trim();
-  const password=String(req.body.password||"");
-  if(!schoolName||schoolName.length>255||!isValidSchoolSlug(slug)||!email||!name||password.length<12){
-    return res.status(400).json({error:"学校名・有効なURL識別子・管理者名・メールアドレス・12文字以上の初期パスワードを指定してください。"});
-  }
-  let school=null,authUser=null;
-  try{
-    if(await findSchoolBySlug(slug))return res.status(409).json({error:"このログインURL識別子は既に使用されています。"});
-    school=await tablesDB.createRow({databaseId:DATABASE_ID,tableId:"schools",rowId:ID.unique(),data:{name:schoolName,slug,status:"active",createdBy:req.authUser.$id,plan:"standard"},permissions:[]});
-    authUser=await users.create({userId:ID.unique(),email,password,name});
-    const profile=await tenantContext.run(school.$id,()=>createRow("users",{
-      authUserId:authUser.$id,email,displayName:name,role:"teacher",status:"active"
-    }));
-    res.status(201).json({success:true,school:{id:school.$id,name:school.name,slug:school.slug,loginUrl:"/"+school.slug+"/login"},owner:{id:profile.authUserId,email:profile.email,name:profile.displayName}});
-  }catch(error){
-    if(authUser)await users.delete({userId:authUser.$id}).catch(()=>{});
-    if(school)await tablesDB.deleteRow({databaseId:DATABASE_ID,tableId:"schools",rowId:school.$id}).catch(()=>{});
-    const message=error.code===409?"このメールアドレスは既に登録されています。":"学校アカウントを作成できませんでした。";
-    res.status(400).json({error:message});
-  }
-});
+
 
 app.get("/api/me",authenticate,async(req,res)=>{
-  const platformAdmin=req.profile.role==="platformAdmin";
-  const school=platformAdmin?null:await getRow("schools",req.profile.schoolId).catch(()=>null);
+  const school=await getRow("schools",req.profile.schoolId).catch(()=>null);
   res.json({
     success:true,
     user:{
@@ -730,7 +658,7 @@ app.get("/api/me",authenticate,async(req,res)=>{
       role:req.profile.role,
       schoolName:school?.name||"",
       schoolSlug:school?.slug||"",
-      platformAdmin
+      platformAdmin:false
     }
   });
 });
@@ -1712,19 +1640,7 @@ app.get("/login.html", (req, res) => {
     if (error && !res.headersSent) res.status(404).type("text").send("Login page file is missing from the deployed public directory.");
   });
 });
-app.get("/:schoolSlug/login", async (req,res)=>{
-  const slug=normalizeSchoolSlug(req.params.schoolSlug);
-  if(!isValidSchoolSlug(slug))return res.status(404).type("text").send("学校専用ログインURLが見つかりません。");
-  try{
-    const school=await findSchoolBySlug(slug);
-    if(!school||school.status!=="active")return res.status(404).type("text").send("学校専用ログインURLが見つからないか、現在利用できません。");
-    res.setHeader("Cache-Control","no-store");
-    res.sendFile(path.join(PUBLIC_DIR,"login.html"),error=>{
-      if(error&&!res.headersSent)res.status(404).type("text").send("Login page file is missing from the deployed public directory.");
-    });
-  }catch(error){res.status(500).type("text").send("学校情報を確認できませんでした。");}
-});
-app.get("/platform", (req, res) => res.redirect(302, "/platform/schools.html"));
+
 app.get("/", (req, res) => res.redirect(302, "/login.html"));
 app.use(express.static(PUBLIC_DIR, { extensions: ["html"], index: false }));
 
