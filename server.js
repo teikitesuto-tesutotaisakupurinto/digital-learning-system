@@ -646,8 +646,7 @@ app.get("/api/me",authenticate,async(req,res)=>{
       name:req.profile.displayName,
       role:req.profile.role,
       schoolName:school?.name||"",
-      schoolSlug:school?.slug||"",
-      platformAdmin:false
+      schoolSlug:school?.slug||""
     }
   });
 });
