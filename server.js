@@ -393,7 +393,7 @@ async function ensureDefaultSchool() {
   if(!school) {
     school=await tablesDB.createRow({
       databaseId:DATABASE_ID,tableId:"schools",rowId:ID.unique(),
-      data:{name:String(process.env.SCHOOL_NAME||"導入校").trim().slice(0,255),slug:normalizeSchoolSlug(process.env.SCHOOL_SLUG||"main"),status:"active",createdBy:"system",plan:"standard"},
+      data:{name:String(process.env.SCHOOL_NAME||"導入校").trim().slice(0,255),slug:"main",status:"active",createdBy:"system",plan:"standard"},
       permissions:[]
     });
   } else {
