@@ -385,17 +385,6 @@ async function updateRow(tableId,rowId,data) {
   return tablesDB.updateRow({databaseId:DATABASE_ID,tableId,rowId,data});
 }
 
-function normalizeSchoolSlug(value) {
-  return String(value || "").trim().toLowerCase();
-}
-function isValidSchoolSlug(value) {
-  return /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(value);
-}
-async function findSchoolBySlug(slug) {
-  const result = await tablesDB.listRows({databaseId:DATABASE_ID,tableId:"schools",queries:[Query.equal("slug",slug),Query.limit(1)]});
-  return result.rows[0] || null;
-}
-
 // Create the initial school and attach all pre-existing records to it.
 // This migration is additive: no existing user, class, material or submission is deleted.
 async function ensureDefaultSchool() {
