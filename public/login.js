@@ -21,8 +21,7 @@ form.addEventListener("submit", async event => {
     const jwt = await account.createJWT();
     const response = await fetch("/api/me", {
       headers: {
-        Authorization: "Bearer " + jwt.jwt,
-        
+        Authorization: "Bearer " + jwt.jwt
       },
       cache: "no-store"
     });
