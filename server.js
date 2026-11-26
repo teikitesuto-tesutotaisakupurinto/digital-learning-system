@@ -1369,12 +1369,9 @@ app.post("/api/submissions/:id/submit", authenticate, async (req, res) => {
 
 /* Teacher progress and grading */
 const liveStreams = new Map();
-function emitLiveEvent(key, eventName = "refresh") {
-  const clients = liveStreams.get(key);
-  if (!clients) return;
-  for (const response of clients) {
-    try { response.write("event: " + eventName + "\ndata: {}\n\n"); } catch {}
-  }
+function emitLiveEvent(key,eventName="refresh",payload={}){
+ const clients=liveStreams.get(key);if(!clients)return;const data=JSON.stringify(payload);
+ for(const response of clients){try{response.write("event: "+eventName+"\ndata: "+data+"\n\n")}catch{}}
 }
 function addLiveClient(key, response) {
   if (!liveStreams.has(key)) liveStreams.set(key, new Set());
@@ -1400,6 +1397,20 @@ function beginEventStream(req, res, key) {
   res.on("close",()=>clearInterval(heartbeat));
   addLiveClient(key,res);
 }
+app.post("/api/submissions/:id/live-stroke",authenticate,async(req,res)=>{
+ try{
+  if(req.profile.role!=="student")return res.status(403).json({error:"生徒の書き込み配信専用です。"});
+  const submission=await getRow("submissions",req.params.id);
+  if(submission.studentId!==req.authUser.$id)return res.status(403).json({error:"この答案を更新する権限がありません。"});
+  const assignment=await getRow("assignments",submission.assignmentId);
+  if(assignment.studentId!==req.authUser.$id||["submitted","passed"].includes(assignment.status))return res.status(409).json({error:"この答案は現在編集できません。"});
+  const pageNo=Number(req.body.pageNo),strokeId=String(req.body.strokeId||""),phase=String(req.body.phase||"");
+  const color=String(req.body.color||"#1749bd"),width=Number(req.body.width)||3,points=req.body.points;
+  if(!Number.isInteger(pageNo)||pageNo<1||pageNo>500||!/^[a-zA-Z0-9-]{1,80}$/.test(strokeId)||!["start","move","end"].includes(phase)||!/^#[0-9a-fA-F]{6}$/.test(color)||!Number.isFinite(width)||width<1||width>24||!Array.isArray(points)||points.length>80||points.some(p=>!Number.isFinite(p?.x)||!Number.isFinite(p?.y)||p.x<0||p.y<0||p.x>10000||p.y>10000))return res.status(400).json({error:"書き込みデータの形式が正しくありません。"});
+  emitLiveEvent("assignment:"+assignment.$id,phase==="end"?"stroke-end":"stroke",{submissionId:submission.$id,studentId:req.authUser.$id,pageNo,strokeId,phase,color,width,points});
+  res.status(204).end();
+ }catch(error){console.error("Live stroke relay failed:",error);res.status(500).json({error:"書き込みをリアルタイム配信できませんでした。"})}
+});
 app.get("/api/teacher/live-stream/:assignmentId",authenticate,requireRole("teacher"),async(req,res)=>{
   try{
     const assignment=await getRow("assignments",req.params.assignmentId);
